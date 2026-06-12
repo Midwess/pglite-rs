@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 
 use futures::channel::oneshot;
 
+use crate::db::PGliteOptions;
 use crate::error::Error;
 
 thread_local! {
@@ -59,6 +60,7 @@ pub(crate) enum EngineCommand {
 pub(crate) struct Engine {
     data_dir: PathBuf,
     runtime_dir: PathBuf,
+    options: PGliteOptions,
     boot_strings: Vec<CString>,
     boot_argv: Vec<*mut c_char>,
 }
@@ -66,6 +68,7 @@ pub(crate) struct Engine {
 impl Engine {
     pub(crate) fn spawn(
         data_dir: PathBuf,
+        options: PGliteOptions,
     ) -> (
         mpsc::Sender<EngineCommand>,
         JoinHandle<()>,
@@ -79,6 +82,7 @@ impl Engine {
                 let mut engine = Engine {
                     data_dir,
                     runtime_dir: Self::runtime_dir(),
+                    options,
                     boot_strings: Vec::new(),
                     boot_argv: Vec::new(),
                 };
@@ -164,8 +168,8 @@ impl Engine {
         self.extract_runtime()?;
         self.run_initdb()?;
 
-        std::env::set_var("PGUSER", "postgres");
-        std::env::set_var("PGDATABASE", "postgres");
+        std::env::set_var("PGUSER", &self.options.username);
+        std::env::set_var("PGDATABASE", &self.options.database);
         std::env::set_var("TZ", "UTC");
         std::env::set_var("PGTZ", "UTC");
         std::env::set_var("PGCLIENTENCODING", "UTF8");
@@ -178,7 +182,7 @@ impl Engine {
         let devnull = CString::new("/dev/null").unwrap();
         let rmode = CString::new("r").unwrap();
 
-        let args: Vec<CString> = [
+        let mut arg_strings: Vec<String> = [
             "--single",
             "-O",
             "-j",
@@ -198,11 +202,24 @@ impl Engine {
             "max_parallel_maintenance_workers=0",
         ]
         .iter()
-        .map(|s| CString::new(*s).unwrap())
+        .map(|s| s.to_string())
         .collect();
-        self.boot_strings.extend(args);
+        if self.options.relaxed_durability {
+            arg_strings.push("-F".into());
+        }
+        for param in &self.options.start_params {
+            arg_strings.push("-c".into());
+            arg_strings.push(param.clone());
+        }
+        arg_strings.push("-D".into());
+        arg_strings.push(self.data_dir.to_str().unwrap().into());
+        arg_strings.push(self.options.database.clone());
+        self.boot_strings.extend(
+            arg_strings
+                .iter()
+                .map(|a| CString::new(a.as_str()).unwrap()),
+        );
         let bin = &self.boot_strings[0];
-        let pgdata = &self.boot_strings[1];
         let args = &self.boot_strings[2..];
 
         let rc = unsafe {
@@ -214,9 +231,6 @@ impl Engine {
             self.boot_argv.push(bin.as_ptr() as *mut c_char);
             self.boot_argv
                 .extend(args.iter().map(|a| a.as_ptr() as *mut c_char));
-            self.boot_argv.push(c"-D".as_ptr() as *mut c_char);
-            self.boot_argv.push(pgdata.as_ptr() as *mut c_char);
-            self.boot_argv.push(c"postgres".as_ptr() as *mut c_char);
             let argc = self.boot_argv.len() as c_int;
             self.boot_argv.push(std::ptr::null_mut());
 
@@ -237,7 +251,7 @@ impl Engine {
         IO.with(|io| {
             let io = &mut *io.borrow_mut();
             io.input.clear();
-            io.input.extend_from_slice(&Self::startup_packet());
+            io.input.extend_from_slice(&self.startup_packet());
             io.input_off = 0;
             io.output.clear();
         });
@@ -255,13 +269,24 @@ impl Engine {
         Ok(())
     }
 
-    fn startup_packet() -> Vec<u8> {
-        let params = b"user\0postgres\0database\0postgres\0client_encoding\0UTF8\0\0";
+    fn startup_packet(&self) -> Vec<u8> {
+        let mut params = Vec::new();
+        for (k, v) in [
+            ("user", self.options.username.as_str()),
+            ("database", self.options.database.as_str()),
+            ("client_encoding", "UTF8"),
+        ] {
+            params.extend_from_slice(k.as_bytes());
+            params.push(0);
+            params.extend_from_slice(v.as_bytes());
+            params.push(0);
+        }
+        params.push(0);
         let total = (4 + 4 + params.len()) as u32;
         let mut pkt = Vec::with_capacity(total as usize);
         pkt.extend_from_slice(&total.to_be_bytes());
         pkt.extend_from_slice(&196608u32.to_be_bytes());
-        pkt.extend_from_slice(params);
+        pkt.extend_from_slice(&params);
         pkt
     }
 
@@ -302,10 +327,11 @@ impl Engine {
                 "--locale=C",
                 "--locale-provider=libc",
                 "--auth=trust",
+                "-U",
+                &self.options.username,
                 "-D",
             ])
             .arg(&self.data_dir)
-            .env("PGUSER", "postgres")
             .env("TZ", "UTC")
             .output()?;
         if !output.status.success() {
@@ -328,7 +354,7 @@ mod tests {
             std::env::temp_dir().join(format!("pglite-engine-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&data_dir);
 
-        let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir.clone());
+        let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir.clone(), PGliteOptions::default());
         futures::executor::block_on(boot_rx).unwrap().unwrap();
 
         let mut wire = vec![b'Q'];

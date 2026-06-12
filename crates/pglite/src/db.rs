@@ -17,6 +17,25 @@ use crate::error::Error;
 use crate::row::{Column, Row};
 
 static OPEN: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Debug)]
+pub struct PGliteOptions {
+    pub username: String,
+    pub database: String,
+    pub relaxed_durability: bool,
+    pub start_params: Vec<String>,
+}
+
+impl Default for PGliteOptions {
+    fn default() -> PGliteOptions {
+        PGliteOptions {
+            username: "postgres".into(),
+            database: "postgres".into(),
+            relaxed_durability: false,
+            start_params: Vec::new(),
+        }
+    }
+}
 static BOOTED: AtomicBool = AtomicBool::new(false);
 
 struct CloseOnDrop {
@@ -50,7 +69,19 @@ impl Drop for TempDataDir {
 
 impl PGlite {
     pub async fn open(data_dir: impl AsRef<Path>) -> Result<PGlite, Error> {
-        Self::open_inner(data_dir.as_ref().to_path_buf(), None).await
+        Self::open_inner(
+            data_dir.as_ref().to_path_buf(),
+            None,
+            PGliteOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn open_with(
+        data_dir: impl AsRef<Path>,
+        options: PGliteOptions,
+    ) -> Result<PGlite, Error> {
+        Self::open_inner(data_dir.as_ref().to_path_buf(), None, options).await
     }
 
     pub async fn open_temp() -> Result<PGlite, Error> {
@@ -62,12 +93,30 @@ impl PGlite {
                 .unwrap()
                 .as_nanos()
         ));
-        Self::open_inner(dir.clone(), Some(Arc::new(TempDataDir(dir)))).await
+        Self::open_inner(
+            dir.clone(),
+            Some(Arc::new(TempDataDir(dir))),
+            PGliteOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn open_temp_with(options: PGliteOptions) -> Result<PGlite, Error> {
+        let dir = std::env::temp_dir().join(format!(
+            "pglite-temp-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        Self::open_inner(dir.clone(), Some(Arc::new(TempDataDir(dir))), options).await
     }
 
     async fn open_inner(
         data_dir: std::path::PathBuf,
         temp_dir: Option<Arc<TempDataDir>>,
+        options: PGliteOptions,
     ) -> Result<PGlite, Error> {
         if OPEN.swap(true, Ordering::SeqCst) {
             return Err(Error::AlreadyOpen);
@@ -76,7 +125,7 @@ impl PGlite {
             OPEN.store(false, Ordering::SeqCst);
             return Err(Error::ReopenUnsupported);
         }
-        let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir);
+        let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir, options);
         match boot_rx.await {
             Ok(Ok(())) => Ok(PGlite {
                 _close: Arc::new(CloseOnDrop {

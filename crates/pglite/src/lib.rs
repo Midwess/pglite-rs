@@ -4,7 +4,7 @@ mod error;
 mod row;
 mod transaction;
 
-pub use db::PGlite;
+pub use db::{PGlite, PGliteOptions};
 pub use error::Error;
 pub use postgres_types::{FromSql, ToSql};
 pub use row::{Column, Row};
