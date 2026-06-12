@@ -4,6 +4,8 @@ mod error;
 mod live;
 #[cfg(feature = "multiple-process")]
 mod multiple_process;
+#[cfg(feature = "replica")]
+mod replica;
 mod row;
 mod transaction;
 
@@ -13,6 +15,8 @@ pub use live::LiveQuery;
 #[cfg(feature = "multiple-process")]
 pub use multiple_process::MultiProcessOptions;
 pub use postgres_types::{FromSql, ToSql};
+#[cfg(feature = "replica")]
+pub use replica::{CommittedTransaction, Lsn, Replica, ReplicaConfig, RowChange};
 pub use row::{Column, Row};
 pub use transaction::Transaction;
 

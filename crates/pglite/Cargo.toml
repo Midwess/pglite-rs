@@ -21,9 +21,11 @@ fallible-iterator = "0.2"
 [dev-dependencies]
 futures = { version = "0.3", features = ["executor"] }
 libc = "0.2"
+postgres = "0.19"
 
 [features]
 multiple-process = []
 pgcrypto = []
 pgvector = []
 icu = ["pglite-sys/icu"]
+replica = []

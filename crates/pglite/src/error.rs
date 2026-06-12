@@ -28,6 +28,14 @@ pub enum Error {
     PostmasterStart(String),
     #[error("connection pool exhausted: no connection became free within the acquire timeout")]
     PoolExhausted,
+    #[error("replica config error: {0}")]
+    ReplicaConfig(String),
+    #[error("upstream error: {0}")]
+    Upstream(String),
+    #[error("replica halted: {0}")]
+    ReplicaHalted(String),
+    #[error("invalid lsn: {0}")]
+    Lsn(String),
 }
 
 impl Error {

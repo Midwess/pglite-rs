@@ -35,6 +35,7 @@ pub struct MultiProcessOptions {
     pub username: String,
     pub database: String,
     pub max_connections: usize,
+    pub extra_connections: usize,
     pub relaxed_durability: bool,
     pub start_params: Vec<String>,
     pub locale_provider: LocaleProvider,
@@ -46,6 +47,7 @@ impl Default for MultiProcessOptions {
             username: "postgres".into(),
             database: "postgres".into(),
             max_connections: 4,
+            extra_connections: 4,
             relaxed_durability: false,
             start_params: Vec::new(),
             locale_provider: LocaleProvider::default(),
@@ -88,7 +90,13 @@ impl Server {
             .arg("-k")
             .arg(&sock_dir)
             .args(["-c", "listen_addresses="])
-            .args(["-c", &format!("max_connections={}", pool_size + 2)]);
+            .args([
+                "-c",
+                &format!(
+                    "max_connections={}",
+                    pool_size + 2 + options.extra_connections
+                ),
+            ]);
         if options.relaxed_durability {
             cmd.args(["-c", "fsync=off"]);
         }
