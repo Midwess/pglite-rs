@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="pglite-rs: orange rust elephant logo">
+  <title>pglite-rs logo</title>
+  <defs>
+    <radialGradient id="rustBody" cx="40%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#f4a261"/>
+      <stop offset="45%" stop-color="#d4622a"/>
+      <stop offset="80%" stop-color="#9c3a14"/>
+      <stop offset="100%" stop-color="#5c1f08"/>
+    </radialGradient>
+    <linearGradient id="rustRust" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b3a0e" stop-opacity="0.0"/>
+      <stop offset="40%" stop-color="#5c1f08" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#2a0d03" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="highlight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffd9a8" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ffd9a8" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="rustPatches" x="0" y="0" width="64" height="64" patternUnits="userSpaceOnUse">
+      <circle cx="12" cy="20" r="6" fill="#3a1407" opacity="0.35"/>
+      <circle cx="46" cy="8" r="4" fill="#3a1407" opacity="0.30"/>
+      <circle cx="30" cy="44" r="5" fill="#3a1407" opacity="0.40"/>
+      <circle cx="56" cy="52" r="3" fill="#3a1407" opacity="0.30"/>
+      <circle cx="8" cy="56" r="4" fill="#3a1407" opacity="0.35"/>
+    </pattern>
+    <filter id="rough" x="-5%" y="-5%" width="110%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7"/>
+      <feDisplacementMap in="SourceGraphic" scale="3"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#1a0a04"/>
+  <rect width="512" height="512" fill="url(#rustRust)" opacity="0.4"/>
+
+  <g filter="url(#rough)">
+    <path d="M 110 360
+             C 90 300, 95 230, 130 180
+             C 155 145, 195 130, 235 132
+             L 300 110
+             C 350 100, 395 130, 410 175
+             C 425 220, 415 270, 380 295
+             L 365 320
+             C 360 360, 340 390, 305 405
+             L 305 460
+             C 305 478, 290 488, 270 482
+             C 252 476, 248 458, 252 445
+             L 252 415
+             L 215 415
+             L 215 460
+             C 215 478, 200 488, 180 482
+             C 162 476, 158 458, 162 445
+             L 162 410
+             C 138 400, 120 385, 110 360 Z"
+          fill="url(#rustBody)" stroke="#3a1407" stroke-width="3"/>
+
+    <path d="M 110 360
+             C 90 300, 95 230, 130 180
+             C 155 145, 195 130, 235 132
+             L 300 110
+             C 350 100, 395 130, 410 175
+             C 425 220, 415 270, 380 295
+             L 365 320
+             C 360 360, 340 390, 305 405
+             L 305 460
+             C 305 478, 290 488, 270 482
+             C 252 476, 248 458, 252 445
+             L 252 415
+             L 215 415
+             L 215 460
+             C 215 478, 200 488, 180 482
+             C 162 476, 158 458, 162 445
+             L 162 410
+             C 138 400, 120 385, 110 360 Z"
+          fill="url(#rustPatches)"/>
+
+    <path d="M 110 360
+             C 90 300, 95 230, 130 180
+             C 155 145, 195 130, 235 132
+             L 300 110
+             C 350 100, 395 130, 410 175
+             C 425 220, 415 270, 380 295
+             L 365 320
+             C 360 360, 340 390, 305 405
+             L 305 460
+             C 305 478, 290 488, 270 482
+             C 252 476, 248 458, 252 445
+             L 252 415
+             L 215 415
+             L 215 460
+             C 215 478, 200 488, 180 482
+             C 162 476, 158 458, 162 445
+             L 162 410
+             C 138 400, 120 385, 110 360 Z"
+          fill="url(#highlight)"/>
+
+    <path d="M 95 280
+             C 75 270, 60 255, 50 235
+             C 42 218, 45 200, 60 195
+             C 75 192, 88 200, 95 215
+             C 100 225, 100 245, 95 260 Z"
+          fill="url(#rustBody)" stroke="#3a1407" stroke-width="3"/>
+    <ellipse cx="72" cy="218" rx="6" ry="9" fill="#f4a261"/>
+
+    <path d="M 130 180
+             C 145 155, 175 145, 200 150
+             C 215 153, 222 165, 218 175
+             C 213 185, 195 188, 180 185
+             C 165 182, 145 188, 132 200 Z"
+          fill="#3a1407" opacity="0.6"/>
+
+    <ellipse cx="335" cy="200" rx="14" ry="18" fill="#1a0a04"/>
+    <ellipse cx="335" cy="200" rx="6" ry="9" fill="#f4a261"/>
+    <ellipse cx="332" cy="196" rx="2" ry="3" fill="#fff" opacity="0.9"/>
+
+    <path d="M 145 360
+             C 160 380, 175 395, 195 405
+             C 185 412, 170 415, 155 410
+             C 145 407, 140 380, 145 360 Z"
+          fill="#3a1407" opacity="0.5"/>
+
+    <path d="M 360 290 L 358 300 M 380 285 L 378 295 M 345 305 L 343 315"
+          stroke="#3a1407" stroke-width="2" stroke-linecap="round" fill="none"/>
+  </g>
+
+  <g opacity="0.4">
+    <circle cx="80" cy="80" r="3" fill="#d4622a"/>
+    <circle cx="430" cy="90" r="2" fill="#d4622a"/>
+    <circle cx="60" cy="450" r="2.5" fill="#d4622a"/>
+    <circle cx="450" cy="430" r="3" fill="#d4622a"/>
+    <circle cx="100" cy="490" r="2" fill="#d4622a"/>
+    <circle cx="420" cy="480" r="2" fill="#d4622a"/>
+  </g>
+
+  <text x="256" y="38" text-anchor="middle"
+        font-family="ui-monospace, 'SF Mono', Menlo, monospace"
+        font-size="22" font-weight="700" fill="#d4622a" letter-spacing="3">
+    PGLITE-RS
+  </text>
+</svg>
