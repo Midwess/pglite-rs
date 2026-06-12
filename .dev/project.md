@@ -102,10 +102,16 @@ Design record lives in `.dev/changes/implement-pglite-v1/{design.md,blueprint.md
 
 ## Latest Analysis
 
-Last updated: 2026-06-12 — change `implement-pglite-v1`
+Last updated: 2026-06-12 — change `v1-2-engine-parity` (previous: implement-pglite-v1)
 
 ### Architecture Summary
 C engine (`postgres-pglite` submodule) compiled as `libpglite.a` with ~25 libc-override functions in `pglitec.c`; Rust host drives it via registered read/write callbacks and the C trampoline `pgl_native_pump`, which owns `sigsetjmp` and returns exit codes 99 (alive) / 100 (longjmp) as plain ints.
+
+### v1.2 Analysis Additions
+- Extensions: PGXS `make install DESTDIR` against `native/out/install` → tar matching runtime layout; pgcrypto needs system OpenSSL (contrib/pgcrypto/Makefile:64); pgvector = uninitialized submodule `pglite/other_extensions/vector`
+- Live queries reference: temp view + pg_rewrite/pg_depend table walk + statement triggers firing `pg_notify('table_change__<schemaOid>__<tableOid>')` + full re-run (live/index.ts)
+- CRITICAL: `process_response` dispatches notify callbacks synchronously (db.rs:384) — live refresh must be scheduled, never inline
+- pg_dump natively requires a real socket (WASM uses cross-module rw-callback trick) — descoped to future pglite-socket proposal
 
 ### Key Patterns Discovered
 - `-D__PGLITE__` + all socket/libc overrides injected via CFLAGS in `build-pglite.sh:33-45` (NOT configure.ac); `pglitec.o` compiled first WITHOUT those defines so the shim calls real libc
