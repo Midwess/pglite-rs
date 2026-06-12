@@ -1,23 +1,6 @@
-diff --git a/src/backend/access/transam/xlog.c b/src/backend/access/transam/xlog.c
-index 1bb1e43042..a47007858a 100644
 --- a/src/backend/access/transam/xlog.c
 +++ b/src/backend/access/transam/xlog.c
-@@ -634,6 +634,14 @@ static XLogwrtResult LogwrtResult = {0, 0};
-  * Note: call Reserve/ReleaseExternalFD to track consumption of this FD.
-  */
- static int	openLogFile = -1;
-+
-+#ifdef __PGLITE__
-+void
-+pgl_xlog_fd_reset(void)
-+{
-+	openLogFile = -1;
-+}
-+#endif
- static XLogSegNo openLogSegNo = 0;
- static TimeLineID openLogTLI = 0;
- 
-@@ -2519,14 +2527,26 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
+@@ -2527,14 +2527,26 @@
  				 * like a checkpoint is needed, forcibly update RedoRecPtr and
  				 * recheck.
  				 */
@@ -46,11 +29,9 @@ index 1bb1e43042..a47007858a 100644
  			}
  		}
  
-diff --git a/src/backend/postmaster/checkpointer.c b/src/backend/postmaster/checkpointer.c
-index ff00662469..202fedef76 100644
 --- a/src/backend/postmaster/checkpointer.c
 +++ b/src/backend/postmaster/checkpointer.c
-@@ -947,7 +947,11 @@ RequestCheckpoint(int flags)
+@@ -947,7 +947,11 @@
  	/*
  	 * If in a standalone backend, just do it ourselves.
  	 */
