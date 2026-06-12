@@ -95,6 +95,7 @@ else
     for o in $BACKEND_OBJS; do echo "addmod $o"; done
     echo "addlib src/common/libpgcommon_srv.a"
     echo "addlib src/port/libpgport_srv.a"
+    case "$(uname)" in MINGW*|MSYS*) echo "delete getopt_srv.o getopt_long_srv.o" ;; esac
     echo "addmod ../pglitec.o"; echo "addmod ../pglite_native.o"; echo "addmod ../pglite_reset.o"
     for a in $ICU_ARCHIVES; do echo "addlib $a"; done
     echo "save"

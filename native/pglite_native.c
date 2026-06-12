@@ -22,6 +22,7 @@ pgl_native_poll(void *fds, unsigned long nfds, int timeout)
 #endif
 }
 
+#ifndef _WIN32
 int
 pgl_native_setitimer(int which, const void *new_value, void *old_value)
 {
@@ -30,6 +31,7 @@ pgl_native_setitimer(int which, const void *new_value, void *old_value)
 	(void) old_value;
 	return 0;
 }
+#endif
 
 #define PGL_TRAMP_MAX 8
 
