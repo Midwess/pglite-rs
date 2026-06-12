@@ -368,6 +368,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pglite-examples"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pglite",
+]
+
+[[package]]
 name = "pglite-sys"
 version = "0.1.0"
 dependencies = [

@@ -57,6 +57,23 @@ Runtime-agnostic: futures work on tokio, smol, async-std, or plain `futures::exe
 
 The engine is real PostgreSQL with PGlite's patches: the main loop is callable, socket IO is routed through in-memory callbacks, and exits/longjmps are contained in a C trampoline. All engine calls are confined to one dedicated thread; your async calls communicate with it through channels. Data crosses the FFI boundary only as Postgres wire-protocol bytes.
 
+## Examples
+
+Runnable proofs that full Postgres survives embedding — `cargo run -p pglite-examples --bin <name>`:
+
+| Binary | Demonstrates |
+|---|---|
+| `basic` | open, typed queries, transactions, rollback-on-drop |
+| `jsonb` | jsonb operators, GIN containment, `jsonb_agg`, `jsonb_each` |
+| `analytics` | window functions, recursive CTEs, LATERAL, ROLLUP |
+| `fulltext` | tsvector generated column, GIN search, `ts_rank`, `ts_headline` |
+| `rich_types` | enums, domains with CHECK, arrays, ranges, uuid |
+| `plpgsql` | plpgsql functions, row triggers, RAISE + rollback |
+| `ddl_power` | range partitioning, upsert, generated columns, materialized views |
+| `reactive` | LISTEN/NOTIFY, live queries, COPY in/out |
+
+The `examples/build.rs` carries the `export_dynamic` linker flag your own binaries need when using extensions or plpgsql (see Features).
+
 ## Building
 
 The engine ships as a prebuilt static library downloaded by the build script (cached in `~/.cache/pglite-rs/`). To build it yourself:
