@@ -402,6 +402,7 @@ impl PGlite {
         std::fs::create_dir_all(data_dir.as_ref())?;
         let mut archive = tar::Archive::new(file);
         archive.unpack(data_dir.as_ref())?;
+        let _ = std::fs::remove_file(data_dir.as_ref().join("postmaster.pid"));
         Ok(())
     }
 
