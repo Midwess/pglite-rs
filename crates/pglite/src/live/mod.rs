@@ -3,6 +3,8 @@ mod tables;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
+use postgres_types::ToSql;
+
 use crate::db::PGlite;
 use crate::error::Error;
 use crate::row::Row;
@@ -10,15 +12,23 @@ use crate::row::Row;
 pub struct LiveQuery {
     db: PGlite,
     view_name: String,
+    watched: Vec<(u32, u32, String, String)>,
+    tokens: Vec<(String, u64)>,
     wake_tx: mpsc::Sender<()>,
     done: Arc<AtomicBool>,
 }
 
 impl PGlite {
-    pub async fn live_query<F>(&self, sql: &str, callback: F) -> Result<LiveQuery, Error>
+    pub async fn live_query<F>(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+        callback: F,
+    ) -> Result<LiveQuery, Error>
     where
         F: Fn(&[Row]) + Send + Sync + 'static,
     {
+        let formatted = self.format_literals(sql, params).await?;
         let id = format!(
             "{:x}",
             std::time::SystemTime::now()
@@ -29,7 +39,7 @@ impl PGlite {
         let view_name = format!("live_query_{id}_view");
 
         let tx = self.transaction().await?;
-        tx.exec(&format!("CREATE TEMP VIEW \"{view_name}\" AS {sql}"))
+        tx.exec(&format!("CREATE TEMP VIEW \"{view_name}\" AS {formatted}"))
             .await?;
         let tables = tx
             .query(tables::WATCHED_TABLES_SQL, &[&view_name.as_str()])
@@ -49,11 +59,12 @@ impl PGlite {
             ));
         }
         for (schema_oid, table_oid, schema_name, table_name) in &watched {
-            let fresh = self
-                .live_triggers()
-                .lock()
-                .unwrap()
-                .insert((*schema_oid, *table_oid));
+            let fresh = {
+                let mut triggers = self.live_triggers().lock().unwrap();
+                let count = triggers.entry((*schema_oid, *table_oid)).or_insert(0);
+                *count += 1;
+                *count == 1
+            };
             if fresh {
                 tx.exec(&LiveQuery::trigger_ddl(
                     *schema_oid,
@@ -69,16 +80,19 @@ impl PGlite {
         let (wake_tx, wake_rx) = mpsc::channel::<()>();
         let done = Arc::new(AtomicBool::new(false));
 
+        let mut tokens = Vec::new();
         for (schema_oid, table_oid, _, _) in &watched {
             let channel = LiveQuery::channel_name(*schema_oid, *table_oid);
             let tx_clone = wake_tx.clone();
             let done_clone = done.clone();
-            self.listen(&channel, move |_| {
-                if !done_clone.load(Ordering::SeqCst) {
-                    let _ = tx_clone.send(());
-                }
-            })
-            .await?;
+            let token = self
+                .listen(&channel, move |_| {
+                    if !done_clone.load(Ordering::SeqCst) {
+                        let _ = tx_clone.send(());
+                    }
+                })
+                .await?;
+            tokens.push((channel, token));
         }
 
         let select = format!("SELECT * FROM \"{view_name}\"");
@@ -106,6 +120,8 @@ impl PGlite {
         Ok(LiveQuery {
             db: self.clone(),
             view_name,
+            watched,
+            tokens,
             wake_tx,
             done,
         })
@@ -120,6 +136,36 @@ impl LiveQuery {
     pub async fn unsubscribe(self) -> Result<(), Error> {
         self.done.store(true, Ordering::SeqCst);
         let _ = self.wake_tx.send(());
+
+        for (channel, token) in &self.tokens {
+            self.db.unlisten_token(channel, *token).await?;
+        }
+
+        for (schema_oid, table_oid, schema_name, table_name) in &self.watched {
+            let teardown = {
+                let mut triggers = self.db.live_triggers().lock().unwrap();
+                match triggers.get_mut(&(*schema_oid, *table_oid)) {
+                    Some(count) if *count > 1 => {
+                        *count -= 1;
+                        false
+                    }
+                    Some(_) => {
+                        triggers.remove(&(*schema_oid, *table_oid));
+                        true
+                    }
+                    None => false,
+                }
+            };
+            if teardown {
+                self.db
+                    .exec(&format!(
+                        "DROP TRIGGER IF EXISTS \"_notify_trigger_{schema_oid}_{table_oid}\" ON \"{schema_name}\".\"{table_name}\";
+DROP FUNCTION IF EXISTS \"_notify_{schema_oid}_{table_oid}\"()"
+                    ))
+                    .await?;
+            }
+        }
+
         self.db
             .exec(&format!("DROP VIEW IF EXISTS \"{}\"", self.view_name))
             .await

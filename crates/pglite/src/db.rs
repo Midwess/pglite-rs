@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -61,7 +61,7 @@ impl Drop for CloseOnDrop {
 }
 
 type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
-type ListenerMap = HashMap<String, Vec<NotificationCallback>>;
+type ListenerMap = HashMap<String, Vec<(u64, NotificationCallback)>>;
 
 #[derive(Clone)]
 pub struct PGlite {
@@ -70,7 +70,8 @@ pub struct PGlite {
     _handle: Arc<JoinHandle<()>>,
     tx_lock: Arc<Mutex<()>>,
     listeners: Arc<std::sync::Mutex<ListenerMap>>,
-    live_triggers: Arc<std::sync::Mutex<std::collections::HashSet<(u32, u32)>>>,
+    next_listener: Arc<AtomicU64>,
+    live_triggers: Arc<std::sync::Mutex<HashMap<(u32, u32), usize>>>,
     _temp_dir: Option<Arc<TempDataDir>>,
     _close: Arc<CloseOnDrop>,
 }
@@ -152,7 +153,8 @@ impl PGlite {
                 _handle: Arc::new(handle),
                 tx_lock: Arc::new(Mutex::new(())),
                 listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
-                live_triggers: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+                next_listener: Arc::new(AtomicU64::new(0)),
+                live_triggers: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 _temp_dir: temp_dir,
             }),
             Ok(Err(e)) => {
@@ -184,19 +186,45 @@ impl PGlite {
         crate::transaction::Transaction::begin(self).await
     }
 
-    pub async fn listen<F>(&self, channel: &str, callback: F) -> Result<(), Error>
+    pub async fn listen<F>(&self, channel: &str, callback: F) -> Result<u64, Error>
     where
         F: Fn(&str) + Send + Sync + 'static,
     {
         let _guard = self.tx_lock.lock().await;
+        let token = self.next_listener.fetch_add(1, Ordering::SeqCst);
         self.listeners
             .lock()
             .unwrap()
             .entry(channel.to_lowercase())
             .or_default()
-            .push(Box::new(callback));
+            .push((token, Box::new(callback)));
         self.exec_unlocked(&format!("LISTEN \"{}\"", channel.replace('"', "\"\"")))
-            .await
+            .await?;
+        Ok(token)
+    }
+
+    pub async fn unlisten_token(&self, channel: &str, token: u64) -> Result<(), Error> {
+        let _guard = self.tx_lock.lock().await;
+        let empty = {
+            let mut listeners = self.listeners.lock().unwrap();
+            let key = channel.to_lowercase();
+            if let Some(entries) = listeners.get_mut(&key) {
+                entries.retain(|(t, _)| *t != token);
+                if entries.is_empty() {
+                    listeners.remove(&key);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if empty {
+            self.exec_unlocked(&format!("UNLISTEN \"{}\"", channel.replace('"', "\"\"")))
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn copy_in(&self, sql: &str, data: &[u8]) -> Result<(), Error> {
@@ -372,8 +400,112 @@ impl PGlite {
         Ok(rows)
     }
 
-    pub(crate) fn live_triggers(&self) -> &std::sync::Mutex<std::collections::HashSet<(u32, u32)>> {
+    pub(crate) fn live_triggers(&self) -> &std::sync::Mutex<HashMap<(u32, u32), usize>> {
         &self.live_triggers
+    }
+
+    pub(crate) async fn describe_param_types(&self, sql: &str) -> Result<Vec<Type>, Error> {
+        let mut wire = BytesMut::new();
+        frontend::parse("", sql, std::iter::empty(), &mut wire)
+            .map_err(|e| Error::Protocol(e.to_string()))?;
+        frontend::describe(b'S', "", &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
+        frontend::sync(&mut wire);
+        let response = self.roundtrip(wire.to_vec()).await?;
+        self.process_response(&response)?;
+        Ok(Self::parse_describe(&response)?.0)
+    }
+
+    pub(crate) async fn query_with_types(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+        types: &[Type],
+    ) -> Result<Vec<Row>, Error> {
+        let mut wire = BytesMut::new();
+        frontend::parse("", sql, types.iter().map(|t| t.oid()), &mut wire)
+            .map_err(|e| Error::Protocol(e.to_string()))?;
+        frontend::describe(b'S', "", &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
+        let values: Vec<(&(dyn ToSql + Sync), Type)> =
+            params.iter().copied().zip(types.iter().cloned()).collect();
+        frontend::bind(
+            "",
+            "",
+            Some(1),
+            values.iter(),
+            |(value, ty), buf| match value.to_sql_checked(ty, buf) {
+                Ok(IsNull::No) => Ok(postgres_protocol::IsNull::No),
+                Ok(IsNull::Yes) => Ok(postgres_protocol::IsNull::Yes),
+                Err(e) => Err(e),
+            },
+            Some(1),
+            &mut wire,
+        )
+        .map_err(|e| match e {
+            frontend::BindError::Conversion(e) => Error::Protocol(e.to_string()),
+            frontend::BindError::Serialization(e) => Error::Protocol(e.to_string()),
+        })?;
+        frontend::execute("", 0, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
+        frontend::sync(&mut wire);
+
+        let response = self.roundtrip(wire.to_vec()).await?;
+        self.process_response(&response)?;
+        let (_, columns) = Self::parse_describe(&response)?;
+        let columns = Arc::new(columns);
+        let mut rows = Vec::new();
+        let mut buf = BytesMut::from(&response[..]);
+        while let Some(message) =
+            Message::parse(&mut buf).map_err(|e| Error::Protocol(e.to_string()))?
+        {
+            if let Message::DataRow(body) = message {
+                rows.push(Row::new(columns.clone(), body)?);
+            }
+        }
+        Ok(rows)
+    }
+
+    pub(crate) async fn format_literals(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<String, Error> {
+        if params.is_empty() {
+            return Ok(sql.to_string());
+        }
+        let param_types = self.describe_param_types(sql).await?;
+        if param_types.len() != params.len() {
+            return Err(Error::Protocol(format!(
+                "statement takes {} parameters, {} given",
+                param_types.len(),
+                params.len()
+            )));
+        }
+
+        let mut subbed = String::with_capacity(sql.len());
+        let mut chars = sql.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '$' && chars.peek().is_some_and(|n| n.is_ascii_digit()) {
+                subbed.push('%');
+                while let Some(d) = chars.peek().copied().filter(|d| d.is_ascii_digit()) {
+                    subbed.push(d);
+                    chars.next();
+                }
+                subbed.push('L');
+            } else {
+                subbed.push(c);
+            }
+        }
+
+        let placeholders: Vec<String> = (0..params.len()).map(|i| format!("${}", i + 2)).collect();
+        let select = format!("SELECT format($1, {})", placeholders.join(", "));
+        let mut all_types = vec![Type::TEXT];
+        all_types.extend(param_types);
+        let mut all_params: Vec<&(dyn ToSql + Sync)> = vec![&subbed];
+        all_params.extend_from_slice(params);
+
+        let rows = self
+            .query_with_types(&select, &all_params, &all_types)
+            .await?;
+        Ok(rows[0].get::<&str>(0)?.to_string())
     }
 
     pub(crate) async fn lock_for_transaction(&self) -> futures::lock::MutexGuard<'_, ()> {
@@ -418,7 +550,7 @@ impl PGlite {
                         .map_err(|e| Error::Protocol(e.to_string()))?
                         .to_string();
                     if let Some(callbacks) = self.listeners.lock().unwrap().get(&channel) {
-                        for callback in callbacks {
+                        for (_, callback) in callbacks {
                             callback(&payload);
                         }
                     }
