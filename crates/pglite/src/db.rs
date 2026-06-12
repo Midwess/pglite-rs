@@ -661,6 +661,24 @@ impl PGlite {
         self.backend.roundtrip(wire).await
     }
 
+    #[cfg(feature = "socket")]
+    pub(crate) fn dispatch_notifications(&self, response: &[u8]) {
+        let mut buf = BytesMut::from(response);
+        while let Ok(Some(message)) = Message::parse(&mut buf) {
+            if let Message::NotificationResponse(body) = message {
+                let (Ok(channel), Ok(payload)) = (body.channel(), body.message()) else {
+                    continue;
+                };
+                let channel = channel.to_lowercase();
+                if let Some(callbacks) = self.listeners.lock().unwrap().get(&channel) {
+                    for (_, callback) in callbacks {
+                        callback(payload);
+                    }
+                }
+            }
+        }
+    }
+
     fn process_response(&self, response: &[u8]) -> Result<(), Error> {
         let mut buf = BytesMut::from(response);
         while let Some(message) =

@@ -25,6 +25,7 @@ postgres = "0.19"
 
 [features]
 multiple-process = []
+socket = []
 pgcrypto = []
 pgvector = []
 icu = ["pglite-sys/icu"]
