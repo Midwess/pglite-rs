@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -37,6 +38,10 @@ impl NotifyConn {
             .spawn(move || Self::reader_loop(reader, pending, listeners))
             .map_err(Error::Io)?;
         Ok(conn)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        let _ = self.writer.lock().unwrap().shutdown(Shutdown::Both);
     }
 
     pub(crate) async fn command(&self, sql: &str) -> Result<(), Error> {

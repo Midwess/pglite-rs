@@ -234,6 +234,14 @@ impl Pool {
     }
 }
 
+impl Drop for Pool {
+    fn drop(&mut self) {
+        if let Some(conn) = self.notify.lock().unwrap().take() {
+            conn.shutdown();
+        }
+    }
+}
+
 pub(crate) struct PinnedConn {
     pool: Arc<Pool>,
     idx: usize,
