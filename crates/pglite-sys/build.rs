@@ -8,19 +8,31 @@ const RELEASE_BASE: &str = "https://github.com/Midwess/pglite-rs/releases/downlo
 fn main() {
     println!("cargo:rerun-if-env-changed=PGLITE_LIB_DIR");
 
+    if env::var("DOCS_RS").is_ok() {
+        return;
+    }
+
     let lib_dir = resolve_lib_dir();
+    println!("cargo:lib_dir={}", lib_dir.display());
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=pglite");
     println!("cargo:rustc-link-lib=z");
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
-        if env::var("CARGO_FEATURE_ICU").is_ok() {
-            println!("cargo:rustc-link-lib=c++");
+    match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("macos") => {
+            println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
+            if env::var("CARGO_FEATURE_ICU").is_ok() {
+                println!("cargo:rustc-link-lib=c++");
+            }
         }
-    } else {
-        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
-        if env::var("CARGO_FEATURE_ICU").is_ok() {
-            println!("cargo:rustc-link-lib=stdc++");
+        Ok("windows") => {
+            println!("cargo:rustc-link-lib=ws2_32");
+            println!("cargo:rustc-link-lib=secur32");
+        }
+        _ => {
+            println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
+            if env::var("CARGO_FEATURE_ICU").is_ok() {
+                println!("cargo:rustc-link-lib=stdc++");
+            }
         }
     }
 }
@@ -46,6 +58,10 @@ fn resolve_lib_dir() -> PathBuf {
         return PathBuf::from(dir);
     }
 
+    if let Some(dir) = artifact_lib_dir() {
+        return dir;
+    }
+
     let local = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("../../native/out")
         .join(variant_subdir());
@@ -56,9 +72,20 @@ fn resolve_lib_dir() -> PathBuf {
     download_prebuilt()
 }
 
+fn artifact_lib_dir() -> Option<PathBuf> {
+    if env::var("CARGO_FEATURE_ICU").is_ok() {
+        return None;
+    }
+    let target = env::var("TARGET").unwrap().replace('-', "_").to_uppercase();
+    let root = env::var(format!("DEP_PGLITE_LIB_{target}_ROOT")).ok()?;
+    let dir = PathBuf::from(root).join("lib");
+    dir.join("libpglite.a").exists().then_some(dir)
+}
+
 fn download_prebuilt() -> PathBuf {
     let target = env::var("TARGET").unwrap();
     let cache = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| env::temp_dir())
         .join(".cache/pglite-rs")

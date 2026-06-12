@@ -47,7 +47,7 @@ if [ ! -f "$BUILD/config.status" ]; then
     CFLAGS="-O2 -fPIC")
 fi
 
-PGLITE_DEFS="-D__PGLITE__ \
+PGLITE_DEFS="-D__PGLITE__ -U_FORTIFY_SOURCE \
 -Dsystem=pgl_system -Dpopen=pgl_popen -Dpclose=pgl_pclose \
 -Dgeteuid=pgl_geteuid -Dgetuid=pgl_getuid -Dgetpwuid=pgl_getpwuid \
 -Dexit=pgl_exit \

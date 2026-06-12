@@ -1,3 +1,12 @@
+//! Raw FFI bindings to `libpglite`, the in-process PostgreSQL engine from
+//! [postgres-pglite](https://github.com/electric-sql/postgres-pglite).
+//!
+//! The build script links a prebuilt static `libpglite.a` (downloaded from this
+//! repository's GitHub releases, built locally via `native/build-libpglite.sh`,
+//! or pointed to with `PGLITE_LIB_DIR`). Use the safe
+//! [`pglite-rs`](https://crates.io/crates/pglite-rs) crate unless you need the
+//! raw engine entry points.
+
 use libc::{c_char, c_int, c_void, size_t, ssize_t, FILE};
 
 #[repr(C)]

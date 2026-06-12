@@ -41,10 +41,10 @@ jobs:
         run: cargo test --workspace
 
       - name: Tests with multiple-process feature
-        run: cargo test -p pglite --features multiple-process --test multiprocess
+        run: cargo test -p pglite-rs --features multiple-process --test multiprocess
 
       - name: Tests with socket feature
-        run: cargo test -p pglite --features socket --test socket_gateway
+        run: cargo test -p pglite-rs --features socket --test socket_gateway
 
       - name: ORM examples
         run: |
@@ -55,7 +55,7 @@ jobs:
         run: ./native/build-extensions.sh pgcrypto pgvector
 
       - name: Tests with extension features
-        run: cargo test -p pglite --features pgcrypto,pgvector --test extensions
+        run: cargo test -p pglite-rs --features pgcrypto,pgvector --test extensions
 
   replica:
     runs-on: ubuntu-22.04
@@ -98,4 +98,4 @@ jobs:
         env:
           PGLITE_REPLICA_UPSTREAM_HOST: 127.0.0.1
           PGLITE_REPLICA_UPSTREAM_PASSWORD: postgres
-        run: cargo test -p pglite --features replica
+        run: cargo test -p pglite-rs --features replica

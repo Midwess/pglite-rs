@@ -1,12 +1,24 @@
 [workspace]
 resolver = "2"
-members = ["crates/pglite-sys", "crates/pglite", "examples"]
+members = [
+    "crates/pglite-sys",
+    "crates/pglite",
+    "crates/lib-aarch64-apple-darwin",
+    "crates/lib-x86_64-apple-darwin",
+    "crates/lib-x86_64-unknown-linux-gnu",
+    "crates/lib-aarch64-unknown-linux-gnu",
+    "crates/lib-x86_64-pc-windows-gnu",
+    "examples",
+]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/Midwess/pglite-rs"
+readme = "README.md"
+keywords = ["postgres", "postgresql", "database", "embedded", "pglite"]
 
 [profile.release]
 lto = "thin"

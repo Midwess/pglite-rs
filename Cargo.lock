@@ -832,14 +832,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
-name = "pglite"
+name = "pglite-examples"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pglite-rs",
+ "postgres",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
+name = "pglite-rs"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "fallible-iterator",
  "futures",
  "libc",
- "pglite-sys",
+ "pglite-rs-sys",
  "postgres",
  "postgres-protocol",
  "postgres-types",
@@ -848,21 +859,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "pglite-examples"
+name = "pglite-rs-lib-aarch64-apple-darwin"
 version = "0.1.0"
-dependencies = [
- "futures",
- "pglite",
- "postgres",
- "sqlx",
- "tokio",
-]
 
 [[package]]
-name = "pglite-sys"
+name = "pglite-rs-lib-aarch64-unknown-linux-gnu"
+version = "0.1.0"
+
+[[package]]
+name = "pglite-rs-lib-x86_64-apple-darwin"
+version = "0.1.0"
+
+[[package]]
+name = "pglite-rs-lib-x86_64-pc-windows-gnu"
+version = "0.1.0"
+
+[[package]]
+name = "pglite-rs-lib-x86_64-unknown-linux-gnu"
+version = "0.1.0"
+
+[[package]]
+name = "pglite-rs-sys"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "pglite-rs-lib-aarch64-apple-darwin",
+ "pglite-rs-lib-aarch64-unknown-linux-gnu",
+ "pglite-rs-lib-x86_64-apple-darwin",
+ "pglite-rs-lib-x86_64-pc-windows-gnu",
+ "pglite-rs-lib-x86_64-unknown-linux-gnu",
 ]
 
 [[package]]

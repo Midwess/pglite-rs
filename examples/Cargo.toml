@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-pglite = { path = "../crates/pglite" }
+pglite-rs = { path = "../crates/pglite" }
 futures = { version = "0.3", features = ["executor"] }
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio"], optional = true }
 tokio = { version = "1", features = ["rt", "macros"], optional = true }
@@ -14,9 +14,9 @@ postgres = { version = "0.19", optional = true }
 
 [features]
 default = ["multiple-process", "orm", "replica"]
-multiple-process = ["pglite/multiple-process"]
-orm = ["pglite/socket", "dep:sqlx", "dep:tokio"]
-replica = ["pglite/replica", "dep:postgres"]
+multiple-process = ["pglite-rs/multiple-process"]
+orm = ["pglite-rs/socket", "dep:sqlx", "dep:tokio"]
+replica = ["pglite-rs/replica", "dep:postgres"]
 
 [[bin]]
 name = "basic"

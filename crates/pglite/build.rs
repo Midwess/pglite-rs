@@ -11,12 +11,16 @@ const EXTENSIONS: &[(&str, &str)] = &[
 ];
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=PGLITE_LIB_DIR");
+    if env::var("DOCS_RS").is_ok() {
+        let dest = PathBuf::from(env::var("OUT_DIR").unwrap()).join("pglite-runtime.tar");
+        std::fs::write(&dest, []).expect("cannot write stub runtime tar");
+        return;
+    }
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
-    } else {
-        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
+    match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("macos") => println!("cargo:rustc-link-arg=-Wl,-export_dynamic"),
+        Ok("windows") => {}
+        _ => println!("cargo:rustc-link-arg=-Wl,--export-dynamic"),
     }
 
     let lib_dir = resolve_lib_dir();
@@ -78,20 +82,12 @@ fn variant_subdir() -> &'static str {
 }
 
 fn resolve_lib_dir() -> PathBuf {
-    if let Ok(dir) = env::var("PGLITE_LIB_DIR") {
-        return PathBuf::from(dir);
-    }
-    let local = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("../../native/out")
-        .join(variant_subdir());
-    if local.join("pglite-runtime.tar").exists() {
-        return local;
-    }
-    cache_dir()
+    PathBuf::from(env::var("DEP_PGLITE_LIB_DIR").expect("pglite-rs-sys did not export lib_dir"))
 }
 
 fn cache_dir() -> PathBuf {
     env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| env::temp_dir())
         .join(".cache/pglite-rs")
