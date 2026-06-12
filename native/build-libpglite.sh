@@ -74,7 +74,7 @@ SL_FLAGS=""
 if [ "$(uname)" = "Darwin" ]; then
   SL_FLAGS="-Wl,-undefined,dynamic_lookup"
 fi
-case "$(uname)" in MINGW*|MSYS*) SL_FLAGS="$LINK_OBJS" ;; esac
+case "$(uname)" in MINGW*|MSYS*) SL_FLAGS="$LINK_OBJS -lws2_32" ;; esac
 
 rm -f "$BUILD/src/backend/main/main.o" "$BUILD/src/backend/main/objfiles.txt" "$BUILD/src/bin/initdb/initdb.o" "$BUILD/src/backend/postgres"
 make -C "$BUILD" -j"$NPROC" COPT="$PGLITE_DEFS" LDFLAGS_EX="$LINK_OBJS" LDFLAGS_SL="$SL_FLAGS"
