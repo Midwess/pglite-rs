@@ -111,10 +111,17 @@ Design record lives in `.dev/changes/implement-pglite-v1/{design.md,blueprint.md
 
 ## Latest Analysis
 
-Last updated: 2026-06-12 — change `v1-2-engine-parity` (previous: implement-pglite-v1)
+Last updated: 2026-06-12 — change `multiple-process-mode` (previous: v1-2-engine-parity, implement-pglite-v1)
 
 ### Architecture Summary
 C engine (`postgres-pglite` submodule) compiled as `libpglite.a` with ~25 libc-override functions in `pglitec.c`; Rust host drives it via registered read/write callbacks and the C trampoline `pgl_native_pump`, which owns `sigsetjmp` and returns exit codes 99 (alive) / 100 (longjmp) as plain ints.
+
+### multiple-process-mode Analysis Additions
+- SHOWSTOPPER found pre-implementation: pglitec.c:453/463 pgl_recv/pgl_send call NULL host-callback pointers unconditionally — spawned postmaster backends SIGSEGV on first socket IO (initdb's --single child dodged it via stdin). Patch 0004 NULL-guards to libc recv/send (pglitec.o compiles without the -D renames).
+- Patch 0005 runtime-gates xlog.c:2530 + checkpointer.c:950 single-mode checkpoint skips on is_pglite_active — same binary correct under postmaster (prevents WAL bloat) and in-process (bit-identical behavior).
+- Transport seam = db.rs roundtrip(); Backend enum {InProcess, MultiProcess(Pool)}; tx_lock splits (MP plain queries lock-free; Transaction pins one pooled conn).
+- Session-state casualties under pool routing: live TEMP views (→ non-temp unified + startup sweep) and LISTEN (→ dedicated notify connection, try_clone halves, pending-oneshot acks).
+- --auth=trust sets local+host lines (initdb.c:3231); bare v3 StartupMessage accepted over unix socket (no SSLRequest needed); socket path = sockdir/.s.PGSQL.5432, sun_path ≤104 → short socket dirs mandatory; pg_ctl not shipped → connect-retry readiness.
 
 ### v1.2 Analysis Additions
 - Extensions: PGXS `make install DESTDIR` against `native/out/install` → tar matching runtime layout; pgcrypto needs system OpenSSL (contrib/pgcrypto/Makefile:64); pgvector = uninitialized submodule `pglite/other_extensions/vector`
