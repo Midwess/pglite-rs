@@ -190,6 +190,25 @@ impl Drop for Server {
 }
 
 impl PGlite {
+    pub fn socket_path(&self) -> Option<&Path> {
+        match self.backend() {
+            Backend::MultiProcess(pool) => Some(&pool.server.sock_path),
+            _ => None,
+        }
+    }
+
+    pub fn connection_uri(&self) -> Option<String> {
+        match self.backend() {
+            Backend::MultiProcess(pool) => Some(format!(
+                "postgresql://{}@localhost/{}?host={}",
+                pool.credentials.0,
+                pool.credentials.1,
+                pool.server.sock_dir.display()
+            )),
+            _ => None,
+        }
+    }
+
     pub async fn open_multi_process(
         data_dir: impl AsRef<Path>,
         options: MultiProcessOptions,

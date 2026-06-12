@@ -32,7 +32,7 @@ pub(crate) struct Pool {
     conns: Vec<mpsc::Sender<ConnCmd>>,
     alive: Vec<Arc<AtomicBool>>,
     state: Mutex<PoolState>,
-    credentials: (String, String),
+    pub(crate) credentials: (String, String),
     notify: Mutex<Option<Arc<super::notify::NotifyConn>>>,
     _threads: Vec<JoinHandle<()>>,
 }
