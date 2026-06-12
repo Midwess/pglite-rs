@@ -1,10 +1,15 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use futures::channel::oneshot;
+use futures::FutureExt;
+
+const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
 use super::Server;
 use crate::engine::Engine;
@@ -25,6 +30,7 @@ struct PoolState {
 pub(crate) struct Pool {
     pub(crate) server: Arc<Server>,
     conns: Vec<mpsc::Sender<ConnCmd>>,
+    alive: Vec<Arc<AtomicBool>>,
     state: Mutex<PoolState>,
     credentials: (String, String),
     notify: Mutex<Option<Arc<super::notify::NotifyConn>>>,
@@ -74,10 +80,16 @@ impl Pool {
         database: &str,
     ) -> Result<Pool, Error> {
         let mut conns = Vec::with_capacity(size);
+        let mut alive = Vec::with_capacity(size);
         let mut threads = Vec::with_capacity(size);
         for i in 0..size {
             let mut stream = connect_and_handshake(&server.sock_path, username, database)?;
             let (cmd_tx, cmd_rx) = mpsc::channel::<ConnCmd>();
+            let flag = Arc::new(AtomicBool::new(true));
+            let worker_flag = flag.clone();
+            let sock_path = server.sock_path.clone();
+            let user = username.to_string();
+            let dbname = database.to_string();
             let handle = std::thread::Builder::new()
                 .name(format!("pglite-pool-{i}"))
                 .spawn(move || {
@@ -86,16 +98,28 @@ impl Pool {
                             .write_all(&wire)
                             .map_err(Error::Io)
                             .and_then(|_| read_response(&mut stream));
+                        let failed = result.is_err();
                         let _ = reply.send(result);
+                        if failed {
+                            match connect_and_handshake(&sock_path, &user, &dbname) {
+                                Ok(fresh) => stream = fresh,
+                                Err(_) => {
+                                    worker_flag.store(false, Ordering::SeqCst);
+                                    return;
+                                }
+                            }
+                        }
                     }
                 })
                 .map_err(Error::Io)?;
             conns.push(cmd_tx);
+            alive.push(flag);
             threads.push(handle);
         }
         Ok(Pool {
             server,
             conns,
+            alive,
             state: Mutex::new(PoolState {
                 idle: (0..size).collect(),
                 waiters: Vec::new(),
@@ -106,24 +130,41 @@ impl Pool {
         })
     }
 
-    async fn acquire(&self) -> usize {
+    async fn acquire(&self) -> Result<usize, Error> {
         loop {
             let rx = {
                 let mut state = self.state.lock().unwrap();
-                if let Some(idx) = state.idle.pop() {
-                    return idx;
+                while let Some(idx) = state.idle.pop() {
+                    if self.alive[idx].load(Ordering::SeqCst) {
+                        return Ok(idx);
+                    }
                 }
                 let (tx, rx) = oneshot::channel();
                 state.waiters.push(tx);
                 rx
             };
-            if let Ok(idx) = rx.await {
-                return idx;
+            let (deadline_tx, deadline_rx) = oneshot::channel::<()>();
+            std::thread::spawn(move || {
+                std::thread::sleep(ACQUIRE_TIMEOUT);
+                let _ = deadline_tx.send(());
+            });
+            futures::select! {
+                idx = rx.fuse() => {
+                    if let Ok(idx) = idx {
+                        if self.alive[idx].load(Ordering::SeqCst) {
+                            return Ok(idx);
+                        }
+                    }
+                }
+                _ = deadline_rx.fuse() => return Err(Error::PoolExhausted),
             }
         }
     }
 
     pub(crate) fn release(&self, idx: usize) {
+        if !self.alive[idx].load(Ordering::SeqCst) {
+            return;
+        }
         let mut state = self.state.lock().unwrap();
         while let Some(waiter) = state.waiters.pop() {
             if waiter.send(idx).is_ok() {
@@ -142,18 +183,18 @@ impl Pool {
     }
 
     pub(crate) async fn roundtrip(&self, wire: Vec<u8>) -> Result<Vec<u8>, Error> {
-        let idx = self.acquire().await;
+        let idx = self.acquire().await?;
         let result = self.roundtrip_on(idx, wire).await;
         self.release(idx);
         result
     }
 
-    pub(crate) async fn checkout(self: &Arc<Self>) -> PinnedConn {
-        let idx = self.acquire().await;
-        PinnedConn {
+    pub(crate) async fn checkout(self: &Arc<Self>) -> Result<PinnedConn, Error> {
+        let idx = self.acquire().await?;
+        Ok(PinnedConn {
             pool: self.clone(),
             idx,
-        }
+        })
     }
 
     pub(crate) fn notify_conn(

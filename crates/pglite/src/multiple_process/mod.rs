@@ -1,3 +1,17 @@
+//! Multi-process mode: spawns the bundled `bin/postgres` as a child postmaster on a
+//! private unix socket (no networking) and pools N connections behind the same
+//! `PGlite` API, giving true concurrent sessions with the shared lock table and
+//! cross-session MVCC of a regular Postgres.
+//!
+//! Pool connections self-heal: a worker that hits an IO error reconnects, and if the
+//! server is gone the connection leaves the rotation. Acquire waits are bounded by a
+//! 30s timeout surfacing [`Error::PoolExhausted`](crate::Error).
+//!
+//! Orphan caveat: if the host process is SIGKILLed, the child postmaster's process
+//! group receives no signal; the next `open_multi_process` on the same data dir relies
+//! on Postgres' stale `postmaster.pid` handling, and abandoned socket dirs under the
+//! OS temp dir persist until the OS cleans them.
+
 pub(crate) mod notify;
 pub(crate) mod pool;
 

@@ -26,6 +26,8 @@ pub enum Error {
     Boot(String),
     #[error("postmaster failed to start: {0}")]
     PostmasterStart(String),
+    #[error("connection pool exhausted: no connection became free within the acquire timeout")]
+    PoolExhausted,
 }
 
 impl Error {

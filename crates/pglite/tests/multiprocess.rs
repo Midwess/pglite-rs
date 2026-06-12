@@ -394,3 +394,38 @@ fn advisory_locks_copy_and_clean_shutdown() {
         let _ = std::fs::remove_dir_all(&base);
     });
 }
+
+#[test]
+fn pool_survives_terminated_backend() {
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mpdead-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(&base, MultiProcessOptions::default())
+            .await
+            .unwrap();
+
+        let tx = db.transaction().await.unwrap();
+        let rows = tx.query("SELECT pg_backend_pid()", &[]).await.unwrap();
+        let pinned_pid = rows[0].get::<i32>(0).unwrap();
+
+        db.query("SELECT pg_terminate_backend($1)", &[&pinned_pid])
+            .await
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(
+            tx.exec("SELECT 1").await.is_err(),
+            "statement on a terminated backend must surface an error"
+        );
+        drop(tx);
+
+        for _ in 0..4 {
+            let rows = db.query("SELECT 1", &[]).await.unwrap();
+            assert_eq!(rows[0].get::<i32>(0).unwrap(), 1);
+        }
+
+        db.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}

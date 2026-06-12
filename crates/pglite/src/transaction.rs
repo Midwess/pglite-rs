@@ -18,7 +18,7 @@ impl<'a> Transaction<'a> {
         #[cfg(feature = "multiple-process")]
         if db.backend().is_multi_process() {
             let pin = match db.backend() {
-                crate::db::Backend::MultiProcess(pool) => pool.checkout().await,
+                crate::db::Backend::MultiProcess(pool) => pool.checkout().await?,
                 _ => unreachable!(),
             };
             let mut tx = Transaction {
