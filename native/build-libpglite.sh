@@ -91,15 +91,15 @@ if [ "$(uname)" = "Darwin" ]; then
     "$OUT/pglitec.o" "$OUT/pglite_native.o" "$OUT/pglite_reset.o" $ICU_ARCHIVES)
 else
   (cd "$BUILD" && {
-    echo "create $OUT/libpglite.a"
+    echo "create libpglite.a"
     for o in $BACKEND_OBJS; do echo "addmod $o"; done
     echo "addlib src/common/libpgcommon_srv.a"
     echo "addlib src/port/libpgport_srv.a"
-    echo "addmod $OUT/pglitec.o"; echo "addmod $OUT/pglite_native.o"; echo "addmod $OUT/pglite_reset.o"
+    echo "addmod ../pglitec.o"; echo "addmod ../pglite_native.o"; echo "addmod ../pglite_reset.o"
     for a in $ICU_ARCHIVES; do echo "addlib $a"; done
     echo "save"
     echo "end"
-  } | ar -M)
+  } | ar -M && mv -f libpglite.a "$OUT/libpglite.a")
 fi
 
 EXE=""
