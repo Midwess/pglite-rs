@@ -29,6 +29,7 @@ Also included: `PGliteOptions` (custom user/database, relaxed durability, server
 | `pgvector` | the pgvector extension — `CREATE EXTENSION vector`, embedding columns, similarity search |
 | `pgcrypto` | the pgcrypto extension — digests, encryption (needs OpenSSL at artifact-build time only) |
 | `icu` | ICU engine variant — real Unicode collation via `locale_provider: Icu` (~+40MB, statically bundled) |
+| `multiple-process` | `PGlite::open_multi_process` — a child postmaster with pooled connections for true concurrent sessions (parallel transactions, cross-session locks), same API, no networking |
 
 Extension features require one linker flag in the consuming binary so the dlopen'd modules can resolve engine symbols — add to your crate's `build.rs`:
 

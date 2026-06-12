@@ -40,6 +40,9 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+      - name: Tests with multiple-process feature
+        run: cargo test -p pglite --features multiple-process --test multiprocess
+
       - name: Build extensions
         run: ./native/build-extensions.sh pgcrypto pgvector
 

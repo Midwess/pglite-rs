@@ -107,11 +107,20 @@ Design record lives in `.dev/changes/implement-pglite-v1/{design.md,blueprint.md
 3. Re-apply check: `native/patches/*.patch` must still apply (build script reports); refresh patches if drifted
 4. Update `ENGINE_TAG` const in BOTH `crates/pglite-sys/build.rs` and `crates/pglite/build.rs` to `engine-<new-12char-sha>`
 5. Commit submodule pin + consts; `git tag engine-<sha> && git push origin engine-<sha>` — CI rebuilds base + icu + all extension artifacts atomically on that tag
-6. Caveats: ICU and libc datadirs are mutually incompatible (locale_provider is per-datadir); extension artifacts are only valid against their tag's engine
+6. Patch-only changes (submodule pin unchanged): keep the sha, bump a `-pN` suffix instead — e.g. `engine-06c837c6a303-p2` — and retag; consts in both build.rs must match
+7. Caveats: ICU and libc datadirs are mutually incompatible (locale_provider is per-datadir); extension artifacts are only valid against their tag's engine
 
 ## Latest Analysis
 
-Last updated: 2026-06-12 — change `multiple-process-mode` (previous: v1-2-engine-parity, implement-pglite-v1)
+Last updated: 2026-06-12 — change `replica-mode` (previous: multiple-process-mode, v1-2-engine-parity, implement-pglite-v1)
+
+### replica-mode Analysis Additions
+- Crate is tokio-free by design; replication client is hand-rolled: dedicated `pglite-replica` OS thread + std TcpStream + `postgres-protocol` (SCRAM present at `authentication::sasl`), mirroring the engine-thread precedent (mpsc in, oneshot boot result)
+- CRITICAL gap: `postgres-protocol` 0.6.11 `Message::parse` errors on `CopyBothResponse` (tag W) and lacks XLogData/PrimaryKeepalive/StandbyStatusUpdate — post-START_REPLICATION stream needs `Header::parse` framing + manual tag dispatch (`len` excludes tag: full frame = 1+len; Header::parse does not consume)
+- Applier uses only public PGlite API (`transaction` db.rs:185, `copy_in` db.rs:230, `exec`/`query`) — no db.rs changes; one upstream txn = one PGlite txn with `_pglite_replica` watermark UPDATE inside (crash-safe resume + skip-by-watermark exactly-once)
+- Backfill correctness by construction: `CREATE_REPLICATION_SLOT ... EXPORT_SNAPSHOT` → COPY under that snapshot on a second regular connection → stream from consistent_point
+- Teardown follows crate pattern (Arc<AtomicBool> done + explicit stop + socket read_timeout); core_services CancellationToken N/A (standalone crate); `Error::Closed` from PGlite doubles as stop signal (BOOTED one-way latch — lifetime coupling documented)
+- Feature `replica = []` is Rust-source-only (unlike pgcrypto/pgvector build-side features); tests env-gated via PGLITE_REPLICA_UPSTREAM_DSN, CI needs postgres:16 service container with wal_level=logical (Linux job)
 
 ### Architecture Summary
 C engine (`postgres-pglite` submodule) compiled as `libpglite.a` with ~25 libc-override functions in `pglitec.c`; Rust host drives it via registered read/write callbacks and the C trampoline `pgl_native_pump`, which owns `sigsetjmp` and returns exit codes 99 (alive) / 100 (longjmp) as plain ints.
