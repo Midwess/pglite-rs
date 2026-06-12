@@ -1,34 +1,35 @@
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::db::PGlite;
+use crate::db::{Backend, ListenerMap, PGlite};
 use crate::engine::Engine;
 use crate::error::Error;
 
 static GATEWAY_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-pub struct SocketGateway {
+pub(crate) struct SocketGateway {
     stop: Arc<AtomicBool>,
     sock_dir: PathBuf,
     sock_path: PathBuf,
     uri: String,
     doorman: Option<JoinHandle<()>>,
-    _db: PGlite,
+}
+
+#[derive(Clone)]
+struct GatewayDb {
+    backend: Backend,
+    tx_lock: Arc<futures::lock::Mutex<()>>,
+    listeners: Arc<std::sync::Mutex<ListenerMap>>,
 }
 
 impl PGlite {
-    pub async fn serve_unix_socket(&self) -> Result<SocketGateway, Error> {
-        if self.backend().is_multi_process() {
-            return Err(Error::Protocol(
-                "multi-process instances expose a native socket; use connection_uri()".into(),
-            ));
-        }
+    pub(crate) async fn start_gateway(&self) -> Result<SocketGateway, Error> {
         let rows = self
             .query(
                 "SELECT current_setting('server_version'), current_user, current_database()",
@@ -63,7 +64,12 @@ impl PGlite {
         );
         let stop = Arc::new(AtomicBool::new(false));
         let startup_reply = synth_startup_reply(&server_version);
-        let doorman_db = self.clone();
+        let (backend, tx_lock, listeners) = self.gateway_parts();
+        let doorman_db = GatewayDb {
+            backend,
+            tx_lock,
+            listeners,
+        };
         let doorman_stop = stop.clone();
         let doorman = std::thread::Builder::new()
             .name("pglite-socket".into())
@@ -76,24 +82,13 @@ impl PGlite {
             sock_path,
             uri,
             doorman: Some(doorman),
-            _db: self.clone(),
         })
     }
 }
 
 impl SocketGateway {
-    pub fn socket_path(&self) -> &Path {
-        &self.sock_path
-    }
-
-    pub fn uri(&self) -> &str {
+    pub(crate) fn uri(&self) -> &str {
         &self.uri
-    }
-
-    pub fn shutdown(mut self) -> Result<(), Error> {
-        self.stop_doorman();
-        std::fs::remove_dir_all(&self.sock_dir)?;
-        Ok(())
     }
 
     fn stop_doorman(&mut self) {
@@ -118,7 +113,12 @@ impl Drop for SocketGateway {
     }
 }
 
-fn doorman_loop(db: PGlite, listener: UnixListener, stop: Arc<AtomicBool>, startup_reply: Vec<u8>) {
+fn doorman_loop(
+    db: GatewayDb,
+    listener: UnixListener,
+    stop: Arc<AtomicBool>,
+    startup_reply: Vec<u8>,
+) {
     while !stop.load(Ordering::SeqCst) {
         let Ok((stream, _)) = listener.accept() else {
             return;
@@ -131,7 +131,7 @@ fn doorman_loop(db: PGlite, listener: UnixListener, stop: Arc<AtomicBool>, start
 }
 
 fn serve_client(
-    db: &PGlite,
+    db: &GatewayDb,
     mut stream: UnixStream,
     stop: &AtomicBool,
     startup_reply: &[u8],
@@ -177,10 +177,10 @@ fn serve_client(
         }
         let batch = std::mem::take(&mut pending);
         let response = futures::executor::block_on(async {
-            let _guard = db.lock_for_transaction().await;
-            db.route(crate::db::Via::backend(), batch).await
+            let _guard = db.tx_lock.lock().await;
+            db.backend.roundtrip(batch).await
         })?;
-        db.dispatch_notifications(&response);
+        PGlite::dispatch_notifications_to(&db.listeners, &response);
         stream
             .write_all(&filter_response(&response))
             .map_err(Error::Io)?;

@@ -87,46 +87,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `pgcrypto` | the pgcrypto extension — digests, encryption (needs OpenSSL at artifact-build time only) |
 | `icu` | ICU engine variant — real Unicode collation via `locale_provider: Icu` (~+40MB, statically bundled) |
 | `multiple-process` | `PGlite::open_multi_process` — child postmaster with pooled connections for true concurrent sessions (parallel transactions, cross-session locks), same API, no networking |
-| `socket` | `PGlite::serve_unix_socket` — unix-socket gateway so unmodified ORMs (SQLx, SeaORM, Diesel) talk to the in-process engine |
+| `socket` *(default)* | `PGlite::unix_uri` — unix-socket gateway so unmodified ORMs (SQLx, SeaORM, Diesel) talk to the in-process engine (unix-only; inert on Windows) |
 | `replica` | logical-replication consumer — stream committed changes from a remote Postgres via `PGlite::start_replica` |
 
 > **Note:** A data directory initialized with `locale_provider: Icu` can only be opened by `icu`-feature builds, and vice-versa for libc datadirs.
 
 ## Using ORMs
 
-ORMs speak the Postgres wire protocol over connections they open themselves, so `pglite-rs` meets them at a unix socket — a RAM kernel pipe with a filesystem nameplate, no TCP, no networking.
+ORMs speak the Postgres wire protocol over connections they open themselves, so `pglite-rs` meets them at a unix socket — a RAM kernel pipe with a filesystem nameplate, no TCP, no networking. One call covers every mode:
 
-### Multi-process mode (recommended for ORMs)
+```rust
+let db = PGlite::open("./data").await?;
+let url = db.unix_uri().await?;
 
-Real concurrent sessions, parallel transactions, cross-session locks:
+let pool = sqlx::postgres::PgPoolOptions::new()
+    .max_connections(1)
+    .connect(&url)
+    .await?;                                                                    // SQLx
+let conn = sea_orm::Database::connect(&url).await?;                            // SeaORM
+let mut pg = diesel::PgConnection::establish(&url)?;                           // Diesel
+```
+
+In-process, the first `unix_uri()` call lazily starts a gateway thread that fakes a server; it lives inside `PGlite` and is cleaned up on `close()`/drop. The engine holds a single session, so set the ORM pool size to exactly 1, and know that the ORM and the Rust API share that session: a `db.exec` issued while the ORM holds an open transaction executes inside it. `COPY ... TO STDOUT` works through the gateway; `COPY ... FROM STDIN` does not (in-process engine cannot pause mid-COPY) — use multi-process mode for bulk loads.
+
+### Multi-process mode (recommended for ORM pools)
+
+Real concurrent sessions, parallel transactions, cross-session locks — `unix_uri()` returns the child postmaster's native socket, so the same code works with a real pool:
 
 ```rust
 use pglite::{PGlite, MultiProcessOptions};
 
 let db = PGlite::open_multi_process("./data", MultiProcessOptions::default()).await?;
-let url = db.connection_uri().unwrap();
-
-let pool = sqlx::postgres::PgPoolOptions::new().connect(&url).await?;          // SQLx
-let conn = sea_orm::Database::connect(&url).await?;                            // SeaORM
-let mut pg = diesel::PgConnection::establish(&url)?;                           // Diesel
+let url = db.unix_uri().await?;
+let pool = sqlx::postgres::PgPoolOptions::new().connect(&url).await?;
 ```
 
 External clients get `extra_connections` postmaster slots (default 4) — size it to your ORM pool via `MultiProcessOptions`. The socket lives until `close()`/drop; connect after open, disconnect before close.
-
-### In-process mode (`socket` feature)
-
-No real server exists, so a gateway thread fakes one:
-
-```rust
-let db = PGlite::open("./data").await?;
-let gateway = db.serve_unix_socket().await?;
-let pool = sqlx::postgres::PgPoolOptions::new()
-    .max_connections(1)
-    .connect(gateway.uri())
-    .await?;
-```
-
-The engine holds a single session, so set the ORM pool size to exactly 1, and know that the ORM and the Rust API share that session: a `db.exec` issued while the ORM holds an open transaction executes inside it. `COPY ... TO STDOUT` works through the gateway; `COPY ... FROM STDIN` does not (in-process engine cannot pause mid-COPY) — use multi-process mode for bulk loads. The gateway cleans up fully on drop.
 
 ## How It Works
 
@@ -158,7 +154,7 @@ cargo run -p pglite-examples --features orm --bin <name>
 | `plpgsql` | plpgsql functions, row triggers, RAISE surfacing as `sqlx::Error::Database` |
 | `ddl_power` | range partitioning, upsert, generated columns, materialized views |
 | `reactive` | SQLx NOTIFY firing native `listen()` callbacks, SQLx inserts re-running native live queries, COPY via the native API |
-| `multi_process` | SQLx pool of 4 over `connection_uri()` — concurrent backends, cross-connection MVCC (`--features orm,multiple-process`) |
+| `multi_process` | SQLx pool of 4 over `unix_uri()` — concurrent backends, cross-connection MVCC (`--features orm,multiple-process`) |
 
 The library itself stays tokio-free; sqlx/tokio are example-crate dependencies only. The `examples/build.rs` carries the `export_dynamic` linker flag your own binaries need when using extensions or plpgsql (see [Install](#install)).
 
@@ -177,13 +173,12 @@ cargo test --workspace
 
 | Type | Purpose |
 |---|---|
-| `PGlite` | Main entrypoint. `open` / `open_with_options` / `open_multi_process`. `exec`, `query`, `transaction`, `listen`, `live_query`, `copy_in`, `copy_out`, `dump_data_dir`, `close`. |
+| `PGlite` | Main entrypoint. `open` / `open_with_options` / `open_multi_process`. `exec`, `query`, `transaction`, `listen`, `live_query`, `copy_in`, `copy_out`, `unix_uri`, `dump_data_dir`, `close`. |
 | `PGliteOptions` | username, database, `relaxed_durability`, `start_params`, `locale_provider`. |
 | `Transaction` | `exec` / `query` / `commit` / `rollback`. Rollback on drop if not committed. |
 | `Row` / `Column` | Postgres-protocol-shaped row accessors. `row.get::<T, _>(idx)`, `row.try_get`. |
 | `LiveQuery` | Reactive query handle that re-runs on subscribed table changes. |
 | `MultiProcessOptions` | `extra_connections`, postmaster tuning, ready timeout. |
-| `SocketGateway` | Unix-socket gateway for in-process engine ORM use. |
 | `Replica` / `ReplicaConfig` | Logical-replication consumer over a unix socket. |
 | `Error` | Flat `thiserror` enum. `Database` carries `sqlstate`. `AlreadyOpen`, `Closed`, `Boot`, `PoolExhausted`, `ReplicaHalted`, etc. |
 

@@ -4,10 +4,10 @@ use sqlx::Row;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = pglite::PGlite::open_temp().await?;
-    let gateway = db.serve_unix_socket().await?;
+    let uri = db.unix_uri().await?;
     let pool = PgPoolOptions::new()
         .max_connections(1)
-        .connect(gateway.uri())
+        .connect(&uri)
         .await?;
 
     sqlx::query("CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL)")

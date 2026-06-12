@@ -10,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db =
         pglite::PGlite::open_multi_process(&base, pglite::MultiProcessOptions::default()).await?;
-    let url = db.connection_uri().unwrap();
+    let url = db.unix_uri().await.expect("unix uri");
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)

@@ -139,6 +139,8 @@ pub struct PGlite {
     listeners: Arc<std::sync::Mutex<ListenerMap>>,
     next_listener: Arc<AtomicU64>,
     live_triggers: Arc<std::sync::Mutex<HashMap<(u32, u32), usize>>>,
+    #[cfg(all(unix, feature = "socket"))]
+    gateway: Arc<std::sync::Mutex<Option<crate::socket::SocketGateway>>>,
     _temp_dir: Option<Arc<TempDataDir>>,
 }
 
@@ -152,6 +154,8 @@ impl PGlite {
             listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
             next_listener: Arc::new(AtomicU64::new(0)),
             live_triggers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            #[cfg(all(unix, feature = "socket"))]
+            gateway: Arc::new(std::sync::Mutex::new(None)),
             _temp_dir: None,
         }
     }
@@ -260,6 +264,8 @@ impl PGlite {
                     listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
                     next_listener: Arc::new(AtomicU64::new(0)),
                     live_triggers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                    #[cfg(all(unix, feature = "socket"))]
+                    gateway: Arc::new(std::sync::Mutex::new(None)),
                     _temp_dir: temp_dir,
                 };
                 db.sweep_live_views().await?;
@@ -426,8 +432,36 @@ impl PGlite {
     }
 
     pub async fn close(self) -> Result<(), Error> {
+        #[cfg(all(unix, feature = "socket"))]
+        drop(self.gateway.lock().unwrap().take());
         let _guard = self.tx_lock.lock().await;
         self.backend.close().await
+    }
+
+    #[cfg(all(unix, feature = "socket"))]
+    pub async fn unix_uri(&self) -> Result<String, Error> {
+        #[cfg(feature = "multiple-process")]
+        if let Some(uri) = self.connection_uri() {
+            return Ok(uri);
+        }
+        if let Some(gateway) = self.gateway.lock().unwrap().as_ref() {
+            return Ok(gateway.uri().to_string());
+        }
+        let fresh = self.start_gateway().await?;
+        let mut slot = self.gateway.lock().unwrap();
+        let gateway = slot.get_or_insert(fresh);
+        Ok(gateway.uri().to_string())
+    }
+
+    #[cfg(all(unix, feature = "socket"))]
+    pub(crate) fn gateway_parts(
+        &self,
+    ) -> (Backend, Arc<Mutex<()>>, Arc<std::sync::Mutex<ListenerMap>>) {
+        (
+            self.backend.clone(),
+            self.tx_lock.clone(),
+            self.listeners.clone(),
+        )
     }
 
     pub(crate) async fn notify_command(&self, sql: &str) -> Result<(), Error> {
@@ -655,7 +689,7 @@ impl PGlite {
         Some(wire.to_vec())
     }
 
-    #[cfg(any(feature = "multiple-process", feature = "socket"))]
+    #[cfg(feature = "multiple-process")]
     pub(crate) fn backend(&self) -> &Backend {
         &self.backend
     }
@@ -664,8 +698,11 @@ impl PGlite {
         self.backend.roundtrip(wire).await
     }
 
-    #[cfg(feature = "socket")]
-    pub(crate) fn dispatch_notifications(&self, response: &[u8]) {
+    #[cfg(all(unix, feature = "socket"))]
+    pub(crate) fn dispatch_notifications_to(
+        listeners: &std::sync::Mutex<ListenerMap>,
+        response: &[u8],
+    ) {
         let mut buf = BytesMut::from(response);
         while let Ok(Some(message)) = Message::parse(&mut buf) {
             if let Message::NotificationResponse(body) = message {
@@ -673,7 +710,7 @@ impl PGlite {
                     continue;
                 };
                 let channel = channel.to_lowercase();
-                if let Some(callbacks) = self.listeners.lock().unwrap().get(&channel) {
+                if let Some(callbacks) = listeners.lock().unwrap().get(&channel) {
                     for (_, callback) in callbacks {
                         callback(payload);
                     }

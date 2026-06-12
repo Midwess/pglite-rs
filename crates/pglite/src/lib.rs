@@ -31,8 +31,6 @@
 //! (`pgvector`, `pgcrypto`, `icu`, `multiple-process`, `socket`, `replica`)
 //! and ORM integration over a unix socket.
 
-#[cfg(all(windows, feature = "socket"))]
-compile_error!("the `socket` feature is unix-only (unix-socket gateway)");
 #[cfg(all(windows, feature = "multiple-process"))]
 compile_error!("the `multiple-process` feature is unix-only (child postmaster over unix sockets)");
 
@@ -45,7 +43,7 @@ mod multiple_process;
 #[cfg(feature = "replica")]
 mod replica;
 mod row;
-#[cfg(feature = "socket")]
+#[cfg(all(unix, feature = "socket"))]
 mod socket;
 mod transaction;
 
@@ -58,8 +56,6 @@ pub use postgres_types::{FromSql, ToSql};
 #[cfg(feature = "replica")]
 pub use replica::{CommittedTransaction, Lsn, Replica, ReplicaConfig, RowChange};
 pub use row::{Column, Row};
-#[cfg(feature = "socket")]
-pub use socket::SocketGateway;
 pub use transaction::Transaction;
 
 pub(crate) static RUNTIME_TAR: &[u8] =
