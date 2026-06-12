@@ -15,7 +15,8 @@ if [ "$(uname)" = "Darwin" ]; then
   PGLITEC_COMPAT="$PGLITEC_COMPAT -D__key=_key"
 fi
 
-"$CC" -O2 -fPIC $PGLITEC_COMPAT -c "$SRC/pglite/src/pglitec/pglitec.c" -o "$OUT/pglitec.o"
+"$CC" -O2 -fPIC $PGLITEC_COMPAT -Dexit=pgl_native_exit -c "$SRC/pglite/src/pglitec/pglitec.c" -o "$OUT/pglitec.o"
+"$CC" -O2 -fPIC -I"$ROOT/native" -c "$ROOT/native/pglite_native.c" -o "$OUT/pglite_native.o"
 
 if [ ! -f "$BUILD/config.status" ]; then
   (cd "$BUILD" && "$SRC/configure" \
@@ -46,8 +47,11 @@ if [ "$(uname)" = "Darwin" ]; then
   SL_FLAGS="-Wl,-undefined,dynamic_lookup"
 fi
 
-make -C "$BUILD" -j"$NPROC" COPT="$PGLITE_DEFS" LDFLAGS_EX="$OUT/pglitec.o" LDFLAGS_SL="$SL_FLAGS"
-make -C "$BUILD" install COPT="$PGLITE_DEFS" LDFLAGS_EX="$OUT/pglitec.o" LDFLAGS_SL="$SL_FLAGS"
+LINK_OBJS="$OUT/pglitec.o $OUT/pglite_native.o"
+
+rm -f "$BUILD/src/backend/main/main.o" "$BUILD/src/backend/main/objfiles.txt" "$BUILD/src/bin/initdb/initdb.o"
+make -C "$BUILD" -j"$NPROC" COPT="$PGLITE_DEFS" LDFLAGS_EX="$LINK_OBJS" LDFLAGS_SL="$SL_FLAGS"
+make -C "$BUILD" install COPT="$PGLITE_DEFS" LDFLAGS_EX="$LINK_OBJS" LDFLAGS_SL="$SL_FLAGS"
 
 rm -f "$BUILD/src/backend/main/main.o"
 make -C "$BUILD/src/backend/main" main.o COPT="$PGLITE_DEFS -Dmain=pgl_backend_main"
@@ -71,14 +75,14 @@ BACKEND_OBJS="$(cd "$BUILD" && cat $(find src/backend src/timezone -name objfile
 if [ "$(uname)" = "Darwin" ]; then
   (cd "$BUILD" && libtool -static -o "$OUT/libpglite.a" $BACKEND_OBJS \
     src/common/libpgcommon_srv.a src/port/libpgport_srv.a \
-    "$OUT/pglitec.o" "$OUT/initdb_bundle.o")
+    "$OUT/pglitec.o" "$OUT/pglite_native.o" "$OUT/initdb_bundle.o")
 else
   (cd "$BUILD" && {
     echo "create $OUT/libpglite.a"
     for o in $BACKEND_OBJS; do echo "addmod $o"; done
     echo "addlib src/common/libpgcommon_srv.a"
     echo "addlib src/port/libpgport_srv.a"
-    echo "addmod $OUT/pglitec.o"
+    echo "addmod $OUT/pglitec.o"; echo "addmod $OUT/pglite_native.o"
     echo "addmod $OUT/initdb_bundle.o"
     echo "save"
     echo "end"
