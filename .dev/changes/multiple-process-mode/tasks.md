@@ -1,6 +1,6 @@
 # Tasks: multiple-process-mode
 
-## Progress: [12/15]
+## Progress: [15/15]
 
 **Process rule**: every task ends with `git commit` + `git push origin main`. Short messages, no co-author.
 
@@ -33,12 +33,12 @@
 
 - [x] 6.1 tests/multiprocess.rs (gated): parity CRUD, parallel writes, advisory-lock cross-session, pg_stat_activity shows N backends, COPY under MP, live + notify across connections, teardown leaves no orphan
 - [x] 6.2 examples: multi_process bin (feature-gated in examples crate) demonstrating parallel queries
-- [ ] 6.3 CI: `--features multiple-process` test leg; ENGINE_TAG bump in both build.rs (patches changed engine bytes) + retag per runbook; README features table row
-- [ ] 6.4 project.md Latest Analysis + runbook patch list (0004/0005); CONTEXT.md final pass
+- [x] 6.3 CI: `--features multiple-process` test leg; ENGINE_TAG bump in both build.rs (patches changed engine bytes) + retag per runbook; README features table row
+- [x] 6.4 project.md Latest Analysis + runbook patch list (0004/0005); CONTEXT.md final pass
 
 ## 7. Hardening
 
-- [ ] 7.1 Dead-conn handling (worker IO error → conn marked broken, error surfaced, pool survives); checkout timeout → `PoolExhausted`; module docs incl. orphan caveat
+- [x] 7.1 Dead-conn handling (worker IO error → conn marked broken, error surfaced, pool survives); checkout timeout → `PoolExhausted`; module docs incl. orphan caveat
 
 ---
 

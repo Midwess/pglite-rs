@@ -1,6 +1,6 @@
 # Proposal: Multiple-Process Mode
 
-**Status**: draft
+**Status**: approved
 
 ## Summary
 
