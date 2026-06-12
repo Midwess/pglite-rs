@@ -91,18 +91,21 @@ The engine is real PostgreSQL with PGlite's patches: the main loop is callable, 
 
 ## Examples
 
-Runnable proofs that full Postgres survives embedding — `cargo run -p pglite-examples --bin <name>`:
+Runnable proofs that full Postgres survives embedding — and that a stock ORM drives it. Every example runs its SQL through **SQLx over the socket gateway** (in-process engine, pool size 1): `cargo run -p pglite-examples --features orm --bin <name>`.
 
 | Binary | Demonstrates |
 |---|---|
-| `basic` | open, typed queries, transactions, rollback-on-drop |
-| `jsonb` | jsonb operators, GIN containment, `jsonb_agg`, `jsonb_each` |
+| `basic` | open, SQLx queries with binds, transactions, rollback |
+| `jsonb` | jsonb operators, GIN containment, `jsonb_agg`, `jsonb_set` |
 | `analytics` | window functions, recursive CTEs, LATERAL, ROLLUP |
 | `fulltext` | tsvector generated column, GIN search, `ts_rank`, `ts_headline` |
 | `rich_types` | enums, domains with CHECK, arrays, ranges, uuid |
-| `plpgsql` | plpgsql functions, row triggers, RAISE + rollback |
+| `plpgsql` | plpgsql functions, row triggers, RAISE surfacing as `sqlx::Error::Database` |
 | `ddl_power` | range partitioning, upsert, generated columns, materialized views |
-| `reactive` | LISTEN/NOTIFY, live queries, COPY in/out |
+| `reactive` | SQLx NOTIFY firing native `listen()` callbacks, SQLx inserts re-running native live queries, COPY via the native API |
+| `multi_process` | SQLx pool of 4 over `connection_uri()` — concurrent backends, cross-connection MVCC (`--features orm,multiple-process`) |
+
+The library itself stays tokio-free; sqlx/tokio are example-crate dependencies only.
 
 The `examples/build.rs` carries the `export_dynamic` linker flag your own binaries need when using extensions or plpgsql (see Features).
 

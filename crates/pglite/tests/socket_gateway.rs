@@ -164,6 +164,38 @@ async fn extended_protocol_and_copy(db: &PGlite) {
         let frames = simple_query(&mut client, "SELECT 1");
         assert!(frames.iter().any(|(t, _)| *t == b'D'));
 
+        let mut bad = Vec::new();
+        let query = b"SELECT no_such_column\0";
+        bad.push(b'P');
+        bad.extend_from_slice(&((4 + 1 + query.len() + 2) as u32).to_be_bytes());
+        bad.push(0);
+        bad.extend_from_slice(query);
+        bad.extend_from_slice(&0u16.to_be_bytes());
+        bad.push(b'S');
+        bad.extend_from_slice(&4u32.to_be_bytes());
+        client.write_all(&bad).unwrap();
+        let frames = read_until_ready(&mut client);
+        assert!(frames.iter().any(|(t, _)| *t == b'E'));
+        assert_eq!(frames.iter().filter(|(t, _)| *t == b'Z').count(), 1);
+
+        let mut good = Vec::new();
+        let query = b"SELECT 2\0";
+        good.push(b'P');
+        good.extend_from_slice(&((4 + 1 + query.len() + 2) as u32).to_be_bytes());
+        good.push(0);
+        good.extend_from_slice(query);
+        good.extend_from_slice(&0u16.to_be_bytes());
+        good.push(b'S');
+        good.extend_from_slice(&4u32.to_be_bytes());
+        client.write_all(&good).unwrap();
+        let frames = read_until_ready(&mut client);
+        assert_eq!(
+            frames[0].0,
+            b'1',
+            "first frame after an error batch must be ParseComplete, got {:?}",
+            frames.iter().map(|(t, _)| *t as char).collect::<Vec<_>>()
+        );
+
         drop(client);
         gateway.shutdown().unwrap();
     }

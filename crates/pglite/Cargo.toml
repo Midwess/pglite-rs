@@ -30,3 +30,11 @@ pgcrypto = []
 pgvector = []
 icu = ["pglite-sys/icu"]
 replica = []
+full = [
+    "multiple-process",
+    "socket",
+    "pgcrypto",
+    "pgvector",
+    "icu",
+    "replica",
+]

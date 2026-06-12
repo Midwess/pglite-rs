@@ -46,6 +46,11 @@ jobs:
       - name: Tests with socket feature
         run: cargo test -p pglite --features socket --test socket_gateway
 
+      - name: ORM examples
+        run: |
+          cargo run -p pglite-examples --features orm --bin basic
+          cargo run -p pglite-examples --features orm,multiple-process --bin multi_process
+
       - name: Build extensions
         run: ./native/build-extensions.sh pgcrypto pgvector
 

@@ -181,8 +181,27 @@ fn serve_client(
             db.route(crate::db::Via::backend(), batch).await
         })?;
         db.dispatch_notifications(&response);
-        stream.write_all(&response).map_err(Error::Io)?;
+        stream
+            .write_all(&filter_response(&response))
+            .map_err(Error::Io)?;
     }
+}
+
+fn filter_response(response: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(response.len());
+    let mut offset = 0;
+    let mut last_kept = 0u8;
+    while offset + 5 <= response.len() {
+        let tag = response[offset];
+        let len = u32::from_be_bytes(response[offset + 1..offset + 5].try_into().unwrap()) as usize;
+        let end = (offset + 1 + len.max(4)).min(response.len());
+        if !(tag == b'A' || (tag == b'Z' && last_kept == b'Z')) {
+            out.extend_from_slice(&response[offset..end]);
+            last_kept = tag;
+        }
+        offset = end;
+    }
+    out
 }
 
 fn read_startup(stream: &mut UnixStream) -> Result<(), Error> {

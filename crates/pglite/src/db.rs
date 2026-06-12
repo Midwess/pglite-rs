@@ -50,12 +50,16 @@ static BOOTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct CloseOnDrop {
     cmd_tx: mpsc::Sender<EngineCommand>,
+    handle: std::sync::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Drop for CloseOnDrop {
     fn drop(&mut self) {
         let (reply, _rx) = oneshot::channel();
         let _ = self.cmd_tx.send(EngineCommand::Close { reply });
+        if let Some(handle) = self.handle.lock().unwrap().take() {
+            let _ = handle.join();
+        }
         OPEN.store(false, Ordering::SeqCst);
     }
 }
@@ -67,7 +71,6 @@ pub(crate) type ListenerMap = HashMap<String, Vec<(u64, NotificationCallback)>>;
 pub(crate) enum Backend {
     InProcess {
         cmd_tx: mpsc::Sender<EngineCommand>,
-        _handle: Arc<JoinHandle<()>>,
         _close: Arc<CloseOnDrop>,
     },
     #[cfg(feature = "multiple-process")]
@@ -248,9 +251,9 @@ impl PGlite {
                     backend: Backend::InProcess {
                         _close: Arc::new(CloseOnDrop {
                             cmd_tx: cmd_tx.clone(),
+                            handle: std::sync::Mutex::new(Some(handle)),
                         }),
                         cmd_tx,
-                        _handle: Arc::new(handle),
                     },
                     data_dir: Arc::new(data_dir),
                     tx_lock: Arc::new(Mutex::new(())),
