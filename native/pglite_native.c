@@ -1,7 +1,21 @@
 #include "pglite_native.h"
 
+#include <fcntl.h>
 #include <setjmp.h>
 #include <stdlib.h>
+#include <unistd.h>
+
+extern int	postmaster_alive_fds[2];
+
+void
+pgl_native_setup(void)
+{
+	if (postmaster_alive_fds[0] == -1)
+	{
+		pipe(postmaster_alive_fds);
+		fcntl(postmaster_alive_fds[0], F_SETFL, O_NONBLOCK);
+	}
+}
 
 #define PGL_TRAMP_MAX 8
 

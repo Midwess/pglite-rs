@@ -40,6 +40,7 @@ ssize_t pq_buffer_remaining_data(void);
 void pgl_pq_flush(void);
 bool IsTransactionBlock(void);
 
+void pgl_native_setup(void);
 void pgl_native_exit(int status);
 int pgl_native_call(int (*entry)(int, char **), int argc, char **argv);
 int pgl_native_pump(void);

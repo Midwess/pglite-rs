@@ -10,6 +10,12 @@ CC="${CC:-clang}"
 
 mkdir -p "$BUILD" "$PREFIX"
 
+for p in "$ROOT"/native/patches/*.patch; do
+  if git -C "$SRC" apply --check "$p" 2>/dev/null; then
+    git -C "$SRC" apply "$p"
+  fi
+done
+
 PGLITEC_COMPAT="-include stdlib.h -include stdbool.h"
 if [ "$(uname)" = "Darwin" ]; then
   PGLITEC_COMPAT="$PGLITEC_COMPAT -D__key=_key"
