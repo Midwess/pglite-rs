@@ -1,0 +1,101 @@
+--- a/pglite/src/pglitec/pglitec.c
++++ b/pglite/src/pglitec/pglitec.c
+@@ -16,18 +16,53 @@
+ 
+ #include <unistd.h>
+ #include <stdio.h>
++#ifndef _WIN32
+ #include <sys/shm.h>
++#include <pwd.h>
++#include <sys/socket.h>
++#endif
+ #include <errno.h>
+ #include <time.h>
+-#include <pwd.h>
+ #include <sys/types.h>
+-#include <sys/socket.h>
+ #include <sys/time.h>
+ #include <setjmp.h>
+ #include <stdarg.h>
+ #include <fcntl.h>
+ #include <string.h>
++#include <stdlib.h>
+ 
++#ifdef _WIN32
++#include <winsock2.h>
++#include <ws2tcpip.h>
++typedef int uid_t;
++typedef int gid_t;
++typedef int key_t;
++#define IPC_CREAT 01000
++#define IPC_RMID 0
++#define IPC_SET 1
++#define IPC_STAT 2
++struct ipc_perm { key_t __key; };
++struct shmid_ds {
++    struct ipc_perm shm_perm;
++    size_t shm_segsz;
++    time_t shm_atime;
++    time_t shm_dtime;
++    time_t shm_ctime;
++    unsigned long shm_nattch;
++};
++struct passwd {
++    char *pw_name;
++    char *pw_passwd;
++    uid_t pw_uid;
++    gid_t pw_gid;
++    char *pw_gecos;
++    char *pw_dir;
++    char *pw_shell;
++};
++#define getpagesize() 4096
++#define sigjmp_buf jmp_buf
++#endif
++
+ #if defined(__EMSCRIPTEN__)
+ #include <emscripten/emscripten.h>
+ #else
+@@ -38,8 +73,10 @@
+ volatile int is_pglite_active = 0;
+ 
+ void EMSCRIPTEN_KEEPALIVE clear_setitimer(void) {
++#ifndef _WIN32
+     struct itimerval zero = {{0, 0}, {0, 0}};
+     setitimer(ITIMER_REAL, &zero, NULL);
++#endif
+ }
+ 
+ int pgl_setPGliteActive(int newValue) {
+@@ -425,6 +462,7 @@
+ }
+ 
+ int EMSCRIPTEN_KEEPALIVE pgl_fcntl(int __fd, int __cmd, ...) {
++#ifndef _WIN32
+ 	if (!is_pglite_active) {
+ 		va_list ap;
+ 		void *arg;
+@@ -433,7 +471,8 @@
+ 		va_end(ap);
+ 		return fcntl(__fd, __cmd, arg);
+ 	}
+-	// dummy 
++#endif
++	// dummy
+ 	return 0;
+ }
+ 
+@@ -491,11 +530,13 @@
+ 	return 0;
+ }
+ 
++#ifndef _WIN32
+ struct pollfd {
+     int   fd;         /* file descriptor */
+     short events;     /* requested events */
+ 	short revents;    /* returned events */
+ };
++#endif
+ 
+ int EMSCRIPTEN_KEEPALIVE pgl_poll(struct pollfd fds[], ssize_t nfds, int timeout) {
+ 	if (!is_pglite_active) {

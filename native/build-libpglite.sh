@@ -96,6 +96,8 @@ else
   } | ar -M)
 fi
 
-tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" share/postgresql lib/postgresql bin/initdb bin/postgres
+EXE=""
+case "$(uname)" in MINGW*|MSYS*) EXE=".exe" ;; esac
+tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" share/postgresql lib/postgresql "bin/initdb$EXE" "bin/postgres$EXE"
 
 ls -lh "$OUT/libpglite.a" "$OUT/pglite-runtime.tar"

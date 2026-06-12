@@ -5,6 +5,11 @@
 #include <setjmp.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#define sigjmp_buf jmp_buf
+#define sigsetjmp(env, savesigs) setjmp(env)
+#endif
+
 #define PGL_TRAMP_MAX 8
 extern sigjmp_buf pgl_tramp[PGL_TRAMP_MAX];
 extern int	pgl_tramp_top;
@@ -22,11 +27,13 @@ extern void pgl_xlog_fd_reset(void);
 void
 pgl_native_setup(void)
 {
+#ifndef _WIN32
 	if (postmaster_alive_fds[0] == -1)
 	{
 		pipe(postmaster_alive_fds);
 		fcntl(postmaster_alive_fds[0], F_SETFL, O_NONBLOCK);
 	}
+#endif
 }
 
 void

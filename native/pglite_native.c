@@ -1,13 +1,25 @@
 #include "pglite_native.h"
 
-#include <poll.h>
 #include <setjmp.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#define sigjmp_buf jmp_buf
+#define sigsetjmp(env, savesigs) setjmp(env)
+#define siglongjmp longjmp
+#else
+#include <poll.h>
+#endif
 
 int
 pgl_native_poll(void *fds, unsigned long nfds, int timeout)
 {
+#ifdef _WIN32
+	return WSAPoll((WSAPOLLFD *) fds, (ULONG) nfds, timeout);
+#else
 	return poll((struct pollfd *) fds, (nfds_t) nfds, timeout);
+#endif
 }
 
 int
