@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+          - os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev
+
+      - name: Cache engine build
+        uses: actions/cache@v4
+        with:
+          path: native/out
+          key: engine-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/build-libpglite.sh', 'native/pglite_native.c', 'native/pglite_native.h', 'native/patches/*', '.gitmodules') }}
+
+      - name: Build libpglite
+        run: ./native/build-libpglite.sh
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace

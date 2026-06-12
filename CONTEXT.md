@@ -13,5 +13,5 @@ Domain vocabulary for pglite-rs. Use these terms precisely in specs, proposals, 
 | **Share bundle** | Tarball of `share/postgresql` runtime data (postgres.bki, timezones) the engine needs to initdb/run. Native twin of `pglite.data`. Embedded in the Rust binary via `include_bytes!`, extracted on first open. |
 | **Prebuilt artifact** | Per-target release asset: `libpglite.a` + headers + share bundle, built by CI from the pinned submodule commit. Downloaded and sha256-verified by `pglite-sys/build.rs`; `PGLITE_LIB_DIR` overrides. |
 | **Reference implementation** | `.dev/pglite/packages/pglite/src/pglite.ts` and friends — the production TS host. Behavior questions about the host layer are answered by reading it. |
-| **One-instance constraint** | Hard v1 limit: at most one open `PGlite` per process (Postgres global state). Violation returns `Error::AlreadyOpen`. |
+| **One-instance constraint** | Hard v1 limits: at most one open `PGlite` per process (`Error::AlreadyOpen`) AND at most one engine boot per process lifetime — open after close returns `Error::ReopenUnsupported`; reopen requires a new process (cross-process reopen fully supported). |
 | **Wire protocol** | Postgres frontend/backend message protocol (v3, stable since PG 7.4). The data format crossing the FFI waist; parsed with `postgres-protocol`. |
