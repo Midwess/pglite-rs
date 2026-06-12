@@ -8,6 +8,51 @@ license.workspace = true
 [dependencies]
 pglite = { path = "../crates/pglite" }
 futures = { version = "0.3", features = ["executor"] }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio"], optional = true }
+tokio = { version = "1", features = ["rt", "macros"], optional = true }
+postgres = { version = "0.19", optional = true }
 
 [features]
 multiple-process = ["pglite/multiple-process"]
+orm = ["pglite/socket", "dep:sqlx", "dep:tokio"]
+replica = ["pglite/replica", "dep:postgres"]
+
+[[bin]]
+name = "basic"
+required-features = ["orm"]
+
+[[bin]]
+name = "analytics"
+required-features = ["orm"]
+
+[[bin]]
+name = "ddl_power"
+required-features = ["orm"]
+
+[[bin]]
+name = "fulltext"
+required-features = ["orm"]
+
+[[bin]]
+name = "jsonb"
+required-features = ["orm"]
+
+[[bin]]
+name = "plpgsql"
+required-features = ["orm"]
+
+[[bin]]
+name = "reactive"
+required-features = ["orm"]
+
+[[bin]]
+name = "rich_types"
+required-features = ["orm"]
+
+[[bin]]
+name = "multi_process"
+required-features = ["orm", "multiple-process"]
+
+[[bin]]
+name = "replica_sync"
+required-features = ["replica"]
