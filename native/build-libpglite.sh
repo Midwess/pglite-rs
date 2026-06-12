@@ -95,6 +95,6 @@ else
   } | ar -M)
 fi
 
-tar -C "$PREFIX" -cf "$OUT/pglite-share.tar" share/postgresql
+tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" share/postgresql lib/postgresql bin/initdb bin/postgres
 
-ls -lh "$OUT/libpglite.a" "$OUT/pglite-share.tar"
+ls -lh "$OUT/libpglite.a" "$OUT/pglite-runtime.tar"

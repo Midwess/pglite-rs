@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pglite-sys"]
+members = ["crates/pglite-sys", "crates/pglite"]
 
 [workspace.package]
 version = "0.1.0"
