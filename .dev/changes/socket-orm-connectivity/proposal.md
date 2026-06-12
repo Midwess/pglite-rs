@@ -1,6 +1,6 @@
 # Proposal: ORM connectivity over unix sockets
 
-**Status**: draft
+**Status**: approved
 
 ## Summary
 
