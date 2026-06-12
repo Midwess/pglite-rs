@@ -27,12 +27,12 @@ All C calls into the engine SHALL occur on one dedicated OS thread. The public `
 
 #### Scenario: Existing datadir
 
-- WHEN `open` is called on a previously initialized data directory
+- WHEN `open` is called on a previously initialized data directory from a fresh process
 - THEN initdb is skipped and previously committed data is queryable
 
 ### Requirement: One instance per process
 
-At most one `PGlite` SHALL be open per process. A second `open`/`open_temp` while one is live SHALL return `Error::AlreadyOpen`; after `close`, a new `open` SHALL succeed.
+At most one `PGlite` SHALL be open per process (`Error::AlreadyOpen` while one is live), and at most one engine boot SHALL occur per process lifetime: `open` after `close` SHALL return `Error::ReopenUnsupported`. Reopening a data directory SHALL be supported from a new process.
 
 #### Scenario: Concurrent second open
 

@@ -1,6 +1,6 @@
 # Tasks: implement-pglite-v1
 
-## Progress: [22/26]
+## Progress: [26/26]
 
 **Process rule**: every task ends with `git commit` + `git push origin main` (identity `tiendang <tiendvlp@gmail.com>`, already configured locally). Commit messages: `phase-N: <what>`.
 
@@ -44,10 +44,10 @@
 
 ## 6. Distribution & CI
 
-- [ ] 6.1 `.github/workflows/artifacts.yml`: target matrix (x86_64-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin) → `build-libpglite.sh` → release upload (`libpglite.a`+header+share tar+sha256, tag = submodule pin); commit+push
-- [ ] 6.2 `build.rs` download branch: release URL by target, sha256 verify, cache; commit+push
-- [ ] 6.3 `.github/workflows/ci.yml`: fmt/clippy/`cargo test -p pglite` consuming artifact; commit+push
-- [ ] 6.4 README usage + `PGLITE_LIB_DIR` docs; finalize submodule pin = release tag; commit+push
+- [x] 6.1 `.github/workflows/artifacts.yml`: target matrix (x86_64-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin) → `build-libpglite.sh` → release upload (`libpglite.a`+header+share tar+sha256, tag = submodule pin); commit+push
+- [x] 6.2 `build.rs` download branch: release URL by target, sha256 verify, cache; commit+push
+- [x] 6.3 `.github/workflows/ci.yml`: fmt/clippy/`cargo test -p pglite` consuming artifact; commit+push
+- [x] 6.4 README usage + `PGLITE_LIB_DIR` docs; finalize submodule pin = release tag; commit+push
 
 ---
 

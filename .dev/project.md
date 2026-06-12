@@ -4,7 +4,7 @@
 
 **pglite-rs** — in-process PostgreSQL for Rust, packaged like SQLite. Embeds ElectricSQL's `postgres-pglite` fork (the engine behind PGlite/WASM) compiled **natively** as a static library, wrapped in a safe, async-by-default, runtime-agnostic Rust API.
 
-Status: design phase. No Rust code yet — workspace scaffolding pending. Design decisions settled (see Notes).
+Status: v1 implemented (all 26 tasks complete, 2026-06-12). Workspace builds, all tests green on macOS arm64; CI + artifact pipelines pushed (Linux first run pending).
 
 ## Tech Stack
 
