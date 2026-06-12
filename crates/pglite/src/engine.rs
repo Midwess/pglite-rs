@@ -113,6 +113,7 @@ impl Engine {
             })
     }
 
+    #[cfg(any(feature = "multiple-process", feature = "socket"))]
     pub(crate) fn ram_backed_dir() -> PathBuf {
         if cfg!(target_os = "linux") {
             let shm = Path::new("/dev/shm");

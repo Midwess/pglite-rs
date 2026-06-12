@@ -43,8 +43,54 @@ jobs:
       - name: Tests with multiple-process feature
         run: cargo test -p pglite --features multiple-process --test multiprocess
 
+      - name: Tests with socket feature
+        run: cargo test -p pglite --features socket --test socket_gateway
+
       - name: Build extensions
         run: ./native/build-extensions.sh pgcrypto pgvector
 
       - name: Tests with extension features
         run: cargo test -p pglite --features pgcrypto,pgvector --test extensions
+
+  replica:
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev postgresql-client
+
+      - name: Enable logical replication on the service container
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "ALTER SYSTEM SET wal_level = logical"
+          docker restart ${{ job.services.postgres.id }}
+          until PGPASSWORD=postgres pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done
+
+      - name: Cache engine build
+        uses: actions/cache@v4
+        with:
+          path: native/out
+          key: engine-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/build-libpglite.sh', 'native/pglite_native.c', 'native/pglite_native.h', 'native/patches/*', '.gitmodules') }}
+
+      - name: Build libpglite
+        run: ./native/build-libpglite.sh
+
+      - name: Replica tests
+        env:
+          PGLITE_REPLICA_UPSTREAM_HOST: 127.0.0.1
+          PGLITE_REPLICA_UPSTREAM_PASSWORD: postgres
+        run: cargo test -p pglite --features replica
