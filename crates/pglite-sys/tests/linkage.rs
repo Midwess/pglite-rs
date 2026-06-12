@@ -78,9 +78,11 @@ fn simple_query(sql: &str) -> Vec<u8> {
 
 #[test]
 fn boot_and_select_one() {
-    let prefix = env::var("PGLITE_TEST_PREFIX").map(PathBuf::from).unwrap_or_else(|_| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../native/out/install")
-    });
+    let prefix = env::var("PGLITE_TEST_PREFIX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../native/out/install")
+        });
     let pgdata = env::temp_dir().join(format!("pglite-sys-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&pgdata);
 
@@ -104,7 +106,11 @@ fn boot_and_select_one() {
         .arg(&pgdata)
         .output()
         .expect("failed to run initdb");
-    assert!(status.status.success(), "initdb failed: {}", String::from_utf8_lossy(&status.stderr));
+    assert!(
+        status.status.success(),
+        "initdb failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
 
     let bin = CString::new(prefix.join("bin/postgres").to_str().unwrap()).unwrap();
     let pgdata_c = CString::new(pgdata.to_str().unwrap()).unwrap();
@@ -157,9 +163,8 @@ fn boot_and_select_one() {
     unsafe { pglite_sys::pgl_startPGlite() };
 
     set_input(startup_packet());
-    let rc = unsafe {
-        pglite_sys::ProcessStartupPacket(pglite_sys::pgl_getMyProcPort(), true, true)
-    };
+    let rc =
+        unsafe { pglite_sys::ProcessStartupPacket(pglite_sys::pgl_getMyProcPort(), true, true) };
     assert_eq!(rc, 0, "startup packet rejected");
     unsafe {
         pglite_sys::pgl_sendConnData();

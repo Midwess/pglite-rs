@@ -26,6 +26,28 @@ pgl_native_setitimer(int which, const void *new_value, void *old_value)
 	return 0;
 }
 
+extern bool IsUnderPostmaster;
+extern bool IsPostmasterEnvironment;
+extern int	whereToSendOutput;
+extern void *MyProcPort;
+extern void *UsedShmemSegAddr;
+extern void pgl_shmem_reset(void);
+extern void pgl_fd_reset(void);
+extern void pgl_xlog_fd_reset(void);
+
+void
+pgl_native_reset(void)
+{
+	IsUnderPostmaster = false;
+	IsPostmasterEnvironment = false;
+	whereToSendOutput = 1;
+	MyProcPort = NULL;
+	UsedShmemSegAddr = NULL;
+	pgl_shmem_reset();
+	pgl_fd_reset();
+	pgl_xlog_fd_reset();
+}
+
 #define PGL_TRAMP_MAX 8
 
 static sigjmp_buf pgl_tramp[PGL_TRAMP_MAX];

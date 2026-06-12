@@ -15,7 +15,11 @@ impl<'a> Transaction<'a> {
     pub(crate) async fn begin(db: &'a PGlite) -> Result<Transaction<'a>, Error> {
         let guard = db.lock_for_transaction().await;
         db.exec_unlocked("BEGIN").await?;
-        Ok(Transaction { db, _guard: guard, done: false })
+        Ok(Transaction {
+            db,
+            _guard: guard,
+            done: false,
+        })
     }
 
     pub async fn exec(&self, sql: &str) -> Result<(), Error> {

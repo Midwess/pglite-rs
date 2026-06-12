@@ -41,7 +41,11 @@ impl Row {
             .ranges()
             .collect::<Vec<_>>()
             .map_err(|e| Error::Protocol(e.to_string()))?;
-        Ok(Row { columns, body, ranges })
+        Ok(Row {
+            columns,
+            body,
+            ranges,
+        })
     }
 
     pub fn columns(&self) -> &[Column] {

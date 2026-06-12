@@ -12,6 +12,10 @@ pub enum Error {
     },
     #[error("a PGlite instance is already open in this process")]
     AlreadyOpen,
+    #[error(
+        "PGlite cannot reopen after close within the same process; spawn a new process to reopen"
+    )]
+    ReopenUnsupported,
     #[error("the PGlite instance is closed")]
     Closed,
     #[error(transparent)]
@@ -37,6 +41,11 @@ impl Error {
                 _ => {}
             }
         }
-        Error::Database { sqlstate, message, detail, hint }
+        Error::Database {
+            sqlstate,
+            message,
+            detail,
+            hint,
+        }
     }
 }

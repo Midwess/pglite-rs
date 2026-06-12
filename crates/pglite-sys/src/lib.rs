@@ -8,7 +8,8 @@ pub struct Port {
 pub type PglReadCb = unsafe extern "C" fn(buffer: *mut c_void, max_length: size_t) -> ssize_t;
 pub type PglWriteCb = unsafe extern "C" fn(buffer: *mut c_void, length: size_t) -> ssize_t;
 pub type PglSystemCb = unsafe extern "C" fn(command: *const c_char) -> ssize_t;
-pub type PglPopenCb = unsafe extern "C" fn(command: *const c_char, mode: *const c_char) -> *mut FILE;
+pub type PglPopenCb =
+    unsafe extern "C" fn(command: *const c_char, mode: *const c_char) -> *mut FILE;
 pub type PglPcloseCb = unsafe extern "C" fn(stream: *mut FILE) -> c_int;
 pub type PglMainFn = unsafe extern "C" fn(argc: c_int, argv: *mut *mut c_char) -> c_int;
 
@@ -23,6 +24,8 @@ extern "C" {
     pub fn pgl_setPGliteActive(new_value: c_int) -> c_int;
     pub fn pgl_startPGlite();
     pub fn pgl_run_atexit_funcs();
+    pub fn pgl_shmem_reset();
+    pub fn pgl_native_reset();
     pub fn clear_setitimer();
 
     pub fn pgl_initdb_main(argc: c_int, argv: *mut *mut c_char) -> c_int;

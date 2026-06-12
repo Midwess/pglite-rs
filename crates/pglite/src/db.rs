@@ -17,6 +17,7 @@ use crate::error::Error;
 use crate::row::{Column, Row};
 
 static OPEN: AtomicBool = AtomicBool::new(false);
+static BOOTED: AtomicBool = AtomicBool::new(false);
 
 struct CloseOnDrop {
     cmd_tx: mpsc::Sender<EngineCommand>,
@@ -71,10 +72,16 @@ impl PGlite {
         if OPEN.swap(true, Ordering::SeqCst) {
             return Err(Error::AlreadyOpen);
         }
+        if BOOTED.swap(true, Ordering::SeqCst) {
+            OPEN.store(false, Ordering::SeqCst);
+            return Err(Error::ReopenUnsupported);
+        }
         let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir);
         match boot_rx.await {
             Ok(Ok(())) => Ok(PGlite {
-                _close: Arc::new(CloseOnDrop { cmd_tx: cmd_tx.clone() }),
+                _close: Arc::new(CloseOnDrop {
+                    cmd_tx: cmd_tx.clone(),
+                }),
                 cmd_tx,
                 _handle: Arc::new(handle),
                 tx_lock: Arc::new(Mutex::new(())),
@@ -200,7 +207,10 @@ impl PGlite {
         let mut wire = BytesMut::new();
         if frontend::query("ROLLBACK", &mut wire).is_ok() {
             let (reply, _rx) = oneshot::channel();
-            let _ = self.cmd_tx.send(EngineCommand::Exec { wire: wire.to_vec(), reply });
+            let _ = self.cmd_tx.send(EngineCommand::Exec {
+                wire: wire.to_vec(),
+                reply,
+            });
         }
     }
 

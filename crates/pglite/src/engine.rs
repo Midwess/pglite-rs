@@ -27,7 +27,11 @@ unsafe extern "C" fn read_cb(buffer: *mut c_void, max_length: usize) -> isize {
         let io = &mut *io.borrow_mut();
         let n = (io.input.len() - io.input_off).min(max_length);
         unsafe {
-            std::ptr::copy_nonoverlapping(io.input.as_ptr().add(io.input_off), buffer as *mut u8, n);
+            std::ptr::copy_nonoverlapping(
+                io.input.as_ptr().add(io.input_off),
+                buffer as *mut u8,
+                n,
+            );
         }
         io.input_off += n;
         n as isize
@@ -94,13 +98,15 @@ impl Engine {
     }
 
     fn runtime_dir() -> PathBuf {
-        std::env::var("PGLITE_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| {
-            std::env::temp_dir().join(format!(
-                "pglite-rs-runtime-{}-{}",
-                env!("CARGO_PKG_VERSION"),
-                crate::RUNTIME_TAR.len()
-            ))
-        })
+        std::env::var("PGLITE_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::temp_dir().join(format!(
+                    "pglite-rs-runtime-{}-{}",
+                    env!("CARGO_PKG_VERSION"),
+                    crate::RUNTIME_TAR.len()
+                ))
+            })
     }
 
     fn run(&mut self, cmd_rx: mpsc::Receiver<EngineCommand>) {
@@ -115,6 +121,7 @@ impl Engine {
                     unsafe {
                         pglite_sys::pgl_setPGliteActive(0);
                         pglite_sys::pgl_run_atexit_funcs();
+                        pglite_sys::pgl_native_reset();
                     }
                     let _ = reply.send(());
                     return;
@@ -164,8 +171,10 @@ impl Engine {
         std::env::set_var("PGCLIENTENCODING", "UTF8");
         std::env::set_var("LANG", "C");
 
-        self.boot_strings.push(CString::new(self.runtime_dir.join("bin/postgres").to_str().unwrap()).unwrap());
-        self.boot_strings.push(CString::new(self.data_dir.to_str().unwrap()).unwrap());
+        self.boot_strings
+            .push(CString::new(self.runtime_dir.join("bin/postgres").to_str().unwrap()).unwrap());
+        self.boot_strings
+            .push(CString::new(self.data_dir.to_str().unwrap()).unwrap());
         let devnull = CString::new("/dev/null").unwrap();
         let rmode = CString::new("r").unwrap();
 
@@ -204,17 +213,24 @@ impl Engine {
             pglite_sys::pgl_setPGliteActive(1);
 
             self.boot_argv.push(bin.as_ptr() as *mut c_char);
-            self.boot_argv.extend(args.iter().map(|a| a.as_ptr() as *mut c_char));
+            self.boot_argv
+                .extend(args.iter().map(|a| a.as_ptr() as *mut c_char));
             self.boot_argv.push(c"-D".as_ptr() as *mut c_char);
             self.boot_argv.push(pgdata.as_ptr() as *mut c_char);
             self.boot_argv.push(c"postgres".as_ptr() as *mut c_char);
             let argc = self.boot_argv.len() as c_int;
             self.boot_argv.push(std::ptr::null_mut());
 
-            pglite_sys::pgl_native_call(pglite_sys::pgl_backend_main, argc, self.boot_argv.as_mut_ptr())
+            pglite_sys::pgl_native_call(
+                pglite_sys::pgl_backend_main,
+                argc,
+                self.boot_argv.as_mut_ptr(),
+            )
         };
         if rc != 99 {
-            return Err(Error::Boot(format!("backend main returned {rc}, expected 99")));
+            return Err(Error::Boot(format!(
+                "backend main returned {rc}, expected 99"
+            )));
         }
 
         unsafe { pglite_sys::pgl_startPGlite() };
@@ -267,7 +283,9 @@ impl Engine {
         if std::fs::rename(&staging, &self.runtime_dir).is_err() {
             let _ = std::fs::remove_dir_all(&staging);
             if !self.runtime_dir.join(".extracted").exists() {
-                return Err(Error::Boot("runtime extraction race lost and target invalid".into()));
+                return Err(Error::Boot(
+                    "runtime extraction race lost and target invalid".into(),
+                ));
             }
         }
         Ok(())
@@ -320,7 +338,12 @@ mod tests {
         wire.extend_from_slice(sql);
 
         let (reply_tx, reply_rx) = oneshot::channel();
-        cmd_tx.send(EngineCommand::Exec { wire, reply: reply_tx }).unwrap();
+        cmd_tx
+            .send(EngineCommand::Exec {
+                wire,
+                reply: reply_tx,
+            })
+            .unwrap();
         let response = futures::executor::block_on(reply_rx).unwrap().unwrap();
 
         let types: Vec<u8> = {
@@ -338,7 +361,9 @@ mod tests {
         assert!(types.contains(&b'Z'), "{types:?}");
 
         let (close_tx, close_rx) = oneshot::channel();
-        cmd_tx.send(EngineCommand::Close { reply: close_tx }).unwrap();
+        cmd_tx
+            .send(EngineCommand::Close { reply: close_tx })
+            .unwrap();
         futures::executor::block_on(close_rx).unwrap();
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&data_dir);

@@ -1,0 +1,22 @@
+diff --git a/src/backend/storage/ipc/shmem.c b/src/backend/storage/ipc/shmem.c
+index 6d5f083986..925bfa929e 100644
+--- a/src/backend/storage/ipc/shmem.c
++++ b/src/backend/storage/ipc/shmem.c
+@@ -89,6 +89,17 @@ slock_t    *ShmemLock;			/* spinlock for shared memory and LWLock
+ 
+ static HTAB *ShmemIndex = NULL; /* primary index hashtable for shmem */
+ 
++#ifdef __PGLITE__
++void
++pgl_shmem_reset(void)
++{
++	ShmemSegHdr = NULL;
++	ShmemBase = NULL;
++	ShmemEnd = NULL;
++	ShmemIndex = NULL;
++}
++#endif
++
+ 
+ /*
+  *	InitShmemAccess() --- set up basic pointers to shared memory.

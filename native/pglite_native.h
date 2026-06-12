@@ -24,6 +24,8 @@ FILE *pgl_freopen(const char *pathname, const char *mode, int streamid);
 int pgl_setPGliteActive(int newValue);
 void pgl_startPGlite(void);
 void pgl_run_atexit_funcs(void);
+void pgl_shmem_reset(void);
+void pgl_native_reset(void);
 void clear_setitimer(void);
 
 int pgl_initdb_main(int argc, char **argv);
