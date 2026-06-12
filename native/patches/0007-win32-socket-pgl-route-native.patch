@@ -1,12 +1,19 @@
 --- a/src/include/port/win32_port.h
 +++ b/src/include/port/win32_port.h
-@@ -489,10 +489,12 @@
+@@ -489,10 +489,19 @@
  #define bind(s, addr, addrlen) pgwin32_bind(s, addr, addrlen)
  #define listen(s, backlog) pgwin32_listen(s, backlog)
  #define accept(s, addr, addrlen) pgwin32_accept(s, addr, addrlen)
 -#define connect(s, name, namelen) pgwin32_connect(s, name, namelen)
  #define select(n, r, w, e, timeout) pgwin32_select(n, r, w, e, timeout)
-+#ifndef __PGLITE__
++#ifdef __PGLITE__
++extern int WSAAPI connect(SOCKET s, const struct sockaddr *name, int namelen);
++extern int WSAAPI recv(SOCKET s, char *buf, int len, int flags);
++extern int WSAAPI send(SOCKET s, const char *buf, int len, int flags);
++extern int WSAAPI setsockopt(SOCKET s, int level, int optname, const char *optval, int optlen);
++extern int WSAAPI getsockopt(SOCKET s, int level, int optname, char *optval, int *optlen);
++extern int WSAAPI getsockname(SOCKET s, struct sockaddr *name, int *namelen);
++#else
 +#define connect(s, name, namelen) pgwin32_connect(s, name, namelen)
  #define recv(s, buf, len, flags) pgwin32_recv(s, buf, len, flags)
  #define send(s, buf, len, flags) pgwin32_send(s, buf, len, flags)
