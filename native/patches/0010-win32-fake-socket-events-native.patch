@@ -1,0 +1,24 @@
+--- a/src/backend/storage/ipc/latch.c
++++ b/src/backend/storage/ipc/latch.c
+@@ -1400,8 +1400,21 @@
+ 					 WSAGetLastError());
+ 		}
+ 		if (WSAEventSelect(event->fd, *handle, flags) != 0)
++		{
++#ifdef __PGLITE__
++
++			/*
++			 * PGlite routes client IO through in-memory callbacks; the
++			 * "socket" is a fake descriptor with no OS readiness events.
++			 * The recv/send shims never return EWOULDBLOCK, so this event
++			 * is never waited on; leave it unsignaled.
++			 */
++			if (WSAGetLastError() == WSAENOTSOCK)
++				return;
++#endif
+ 			elog(ERROR, "failed to set up event for socket: error code %d",
+ 				 WSAGetLastError());
++		}
+ 
+ 		Assert(event->fd != PGINVALID_SOCKET);
+ 	}
