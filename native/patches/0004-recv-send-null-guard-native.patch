@@ -1,0 +1,24 @@
+diff --git a/pglite/src/pglitec/pglitec.c b/pglite/src/pglitec/pglitec.c
+index 1614ac9164..b9a38fb9fe 100644
+--- a/pglite/src/pglitec/pglitec.c
++++ b/pglite/src/pglitec/pglitec.c
+@@ -451,6 +451,8 @@ int EMSCRIPTEN_KEEPALIVE pgl_getsockname(int __fd, struct sockaddr * __addr,
+ */
+ 
+ ssize_t EMSCRIPTEN_KEEPALIVE pgl_recv(int __fd, void *__buf, size_t __n, int __flags) {
++	if (pgl_read == NULL)
++		return recv(__fd, __buf, __n, __flags);
+ 	ssize_t got = pgl_read(__buf, __n);
+ 	return got;
+ }
+@@ -460,7 +462,9 @@ ssize_t EMSCRIPTEN_KEEPALIVE pgl_recv(int __fd, void *__buf, size_t __n, int __f
+ */
+ 
+ ssize_t EMSCRIPTEN_KEEPALIVE pgl_send(int __fd, const void *__buf, size_t __n, int __flags) {
+-	ssize_t wrote = pgl_write(__buf, __n);
++	if (pgl_write == NULL)
++		return send(__fd, __buf, __n, __flags);
++	ssize_t wrote = pgl_write((void *) __buf, __n);
+ 	return wrote;
+ }
+ 
