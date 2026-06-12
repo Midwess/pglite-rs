@@ -652,7 +652,7 @@ impl PGlite {
         Some(wire.to_vec())
     }
 
-    #[cfg(feature = "multiple-process")]
+    #[cfg(any(feature = "multiple-process", feature = "socket"))]
     pub(crate) fn backend(&self) -> &Backend {
         &self.backend
     }

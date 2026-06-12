@@ -7,6 +7,8 @@ mod multiple_process;
 #[cfg(feature = "replica")]
 mod replica;
 mod row;
+#[cfg(feature = "socket")]
+mod socket;
 mod transaction;
 
 pub use db::{LocaleProvider, PGlite, PGliteOptions};
@@ -18,6 +20,8 @@ pub use postgres_types::{FromSql, ToSql};
 #[cfg(feature = "replica")]
 pub use replica::{CommittedTransaction, Lsn, Replica, ReplicaConfig, RowChange};
 pub use row::{Column, Row};
+#[cfg(feature = "socket")]
+pub use socket::SocketGateway;
 pub use transaction::Transaction;
 
 pub(crate) static RUNTIME_TAR: &[u8] =
