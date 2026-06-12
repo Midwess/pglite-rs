@@ -20,7 +20,7 @@ jobs:
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev
 
       - name: Cache engine build
         uses: actions/cache@v4
@@ -39,3 +39,9 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      - name: Build extensions
+        run: ./native/build-extensions.sh pgcrypto pgvector
+
+      - name: Tests with extension features
+        run: cargo test -p pglite --features pgcrypto,pgvector --test extensions
