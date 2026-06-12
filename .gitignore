@@ -25,3 +25,4 @@ native/pglite-share.tar
 native/smoke
 *.sha256
 .dev/mono/
+.dev/trailbase/
