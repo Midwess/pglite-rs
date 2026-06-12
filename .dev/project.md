@@ -66,6 +66,10 @@ Three concentric layers; data crosses boundaries as Postgres wire-protocol bytes
 
 ## Conventions
 
+### Feature modules (v1.1+ convention)
+- Every feature-flagged capability gets its own cohesive module folder under `crates/pglite/src/` (e.g., `live/`, `extensions/`, `pg_dump/`): all of the feature's structs, SQL generation, and bundle logic live inside it. `lib.rs` holds the single `#[cfg(feature = "...")] mod` gate; core modules stay flag-free except thin delegating methods. Single-file domains stay single `.rs` files until they grow. Socket bridge = separate crate `pglite-socket`.
+- Flags gate only measurable cost (binary size, engine variants, bundled binaries): per-extension flags, `icu`, `pg-dump`. Pure-API features ship unflagged.
+
 ### Naming / Code Style
 - See `CLAUDE.md` (authoritative): Least New Definitions > Struct-First, strict placement, no inline comments, locks fully encapsulated, `&self`-only public APIs, no `XxxInner` structs
 - `unsafe` confined to `pglite-sys` + `engine.rs`
