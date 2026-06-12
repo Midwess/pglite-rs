@@ -183,6 +183,64 @@ impl PGlite {
             .await
     }
 
+    pub async fn copy_in(&self, sql: &str, data: &[u8]) -> Result<(), Error> {
+        let _guard = self.tx_lock.lock().await;
+        let mut wire = BytesMut::new();
+        frontend::query(sql, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
+        let mut wire = wire.to_vec();
+        wire.push(b'd');
+        wire.extend_from_slice(&((4 + data.len()) as u32).to_be_bytes());
+        wire.extend_from_slice(data);
+        wire.push(b'c');
+        wire.extend_from_slice(&4u32.to_be_bytes());
+
+        let response = self.roundtrip(wire).await?;
+        self.process_response(&response)?;
+        if !Self::has_message(&response, |m| matches!(m, Message::CopyInResponse(_)))? {
+            return Err(Error::Protocol("statement did not initiate COPY IN".into()));
+        }
+        Ok(())
+    }
+
+    pub async fn copy_out(&self, sql: &str) -> Result<Vec<u8>, Error> {
+        let _guard = self.tx_lock.lock().await;
+        let mut wire = BytesMut::new();
+        frontend::query(sql, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
+        let response = self.roundtrip(wire.to_vec()).await?;
+        self.process_response(&response)?;
+        if !Self::has_message(&response, |m| matches!(m, Message::CopyOutResponse(_)))? {
+            return Err(Error::Protocol(
+                "statement did not initiate COPY OUT".into(),
+            ));
+        }
+
+        let mut out = Vec::new();
+        let mut buf = BytesMut::from(&response[..]);
+        while let Some(message) =
+            Message::parse(&mut buf).map_err(|e| Error::Protocol(e.to_string()))?
+        {
+            if let Message::CopyData(body) = message {
+                out.extend_from_slice(body.data());
+            }
+        }
+        Ok(out)
+    }
+
+    fn has_message<F>(response: &[u8], pred: F) -> Result<bool, Error>
+    where
+        F: Fn(&Message) -> bool,
+    {
+        let mut buf = BytesMut::from(response);
+        while let Some(message) =
+            Message::parse(&mut buf).map_err(|e| Error::Protocol(e.to_string()))?
+        {
+            if pred(&message) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub async fn unlisten(&self, channel: &str) -> Result<(), Error> {
         let _guard = self.tx_lock.lock().await;
         self.exec_unlocked(&format!("UNLISTEN \"{}\"", channel.replace('"', "\"\"")))
