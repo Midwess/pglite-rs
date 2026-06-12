@@ -22,6 +22,7 @@ fallible-iterator = "0.2"
 futures = { version = "0.3", features = ["executor"] }
 
 [features]
+multiple-process = []
 pgcrypto = []
 pgvector = []
 icu = ["pglite-sys/icu"]
