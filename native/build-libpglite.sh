@@ -63,26 +63,12 @@ make -C "$BUILD" install COPT="$PGLITE_DEFS" LDFLAGS_EX="$LINK_OBJS" LDFLAGS_SL=
 rm -f "$BUILD/src/backend/main/main.o"
 make -C "$BUILD/src/backend/main" main.o COPT="$PGLITE_DEFS -Dmain=pgl_backend_main"
 
-rm -f "$BUILD/src/bin/initdb/initdb.o"
-make -C "$BUILD/src/bin/initdb" initdb.o COPT="$PGLITE_DEFS -Dmain=pgl_initdb_main"
-
-(cd "$BUILD" && ld -r -o "$OUT/initdb_bundle.o" \
-  src/bin/initdb/initdb.o src/bin/initdb/findtimezone.o src/bin/initdb/localtime.o \
-  src/fe_utils/libpgfeutils.a src/common/libpgcommon.a src/port/libpgport.a)
-
-printf '_pgl_initdb_main\n' > "$OUT/initdb_keep.txt"
-if [ "$(uname)" = "Darwin" ]; then
-  nmedit -s "$OUT/initdb_keep.txt" "$OUT/initdb_bundle.o"
-else
-  objcopy --keep-global-symbol=pgl_initdb_main "$OUT/initdb_bundle.o"
-fi
-
 BACKEND_OBJS="$(cd "$BUILD" && cat $(find src/backend src/timezone -name objfiles.txt) | tr ' ' '\n' | sed '/^$/d' | sort -u)"
 
 if [ "$(uname)" = "Darwin" ]; then
   (cd "$BUILD" && libtool -static -o "$OUT/libpglite.a" $BACKEND_OBJS \
     src/common/libpgcommon_srv.a src/port/libpgport_srv.a \
-    "$OUT/pglitec.o" "$OUT/pglite_native.o" "$OUT/initdb_bundle.o")
+    "$OUT/pglitec.o" "$OUT/pglite_native.o")
 else
   (cd "$BUILD" && {
     echo "create $OUT/libpglite.a"
@@ -90,7 +76,6 @@ else
     echo "addlib src/common/libpgcommon_srv.a"
     echo "addlib src/port/libpgport_srv.a"
     echo "addmod $OUT/pglitec.o"; echo "addmod $OUT/pglite_native.o"
-    echo "addmod $OUT/initdb_bundle.o"
     echo "save"
     echo "end"
   } | ar -M)

@@ -28,7 +28,6 @@ void pgl_shmem_reset(void);
 void pgl_native_reset(void);
 void clear_setitimer(void);
 
-int pgl_initdb_main(int argc, char **argv);
 int pgl_backend_main(int argc, char **argv);
 
 struct Port *pgl_getMyProcPort(void);

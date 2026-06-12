@@ -1,6 +1,6 @@
 # Proposal: v1.2 Engine Parity
 
-**Status**: draft
+**Status**: approved
 
 ## Summary
 

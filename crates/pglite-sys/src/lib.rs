@@ -28,7 +28,6 @@ extern "C" {
     pub fn pgl_native_reset();
     pub fn clear_setitimer();
 
-    pub fn pgl_initdb_main(argc: c_int, argv: *mut *mut c_char) -> c_int;
     pub fn pgl_backend_main(argc: c_int, argv: *mut *mut c_char) -> c_int;
 
     pub fn pgl_getMyProcPort() -> *mut Port;

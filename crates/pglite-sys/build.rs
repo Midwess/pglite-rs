@@ -10,8 +10,13 @@ fn main() {
 
     let lib_dir = resolve_lib_dir();
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib=static=pglite");
+    println!("cargo:rustc-link-lib=static:+whole-archive=pglite");
     println!("cargo:rustc-link-lib=z");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
+    } else {
+        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
+    }
 }
 
 fn resolve_lib_dir() -> PathBuf {
@@ -46,7 +51,10 @@ fn download_prebuilt() -> PathBuf {
     let tarball = cache.join(&asset);
 
     fetch(&url, &tarball);
-    fetch(&format!("{url}.sha256"), &cache.join(format!("{asset}.sha256")));
+    fetch(
+        &format!("{url}.sha256"),
+        &cache.join(format!("{asset}.sha256")),
+    );
 
     let expected = std::fs::read_to_string(cache.join(format!("{asset}.sha256")))
         .expect("cannot read checksum file");
@@ -59,7 +67,12 @@ fn download_prebuilt() -> PathBuf {
     );
 
     let status = Command::new("tar")
-        .args(["xzf", tarball.to_str().unwrap(), "-C", cache.to_str().unwrap()])
+        .args([
+            "xzf",
+            tarball.to_str().unwrap(),
+            "-C",
+            cache.to_str().unwrap(),
+        ])
         .status()
         .expect("failed to run tar");
     assert!(status.success(), "failed to extract {asset}");

@@ -6,6 +6,12 @@ const ENGINE_TAG: &str = "engine-06c837c6a303";
 fn main() {
     println!("cargo:rerun-if-env-changed=PGLITE_LIB_DIR");
 
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
+    } else {
+        println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
+    }
+
     let runtime_tar = resolve_lib_dir().join("pglite-runtime.tar");
     println!("cargo:rerun-if-changed={}", runtime_tar.display());
 
