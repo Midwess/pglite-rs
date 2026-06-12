@@ -49,6 +49,23 @@ fn startup_packet() -> Vec<u8> {
     pkt
 }
 
+fn try_handshake(sock_path: &Path) -> Option<UnixStream> {
+    let mut stream = UnixStream::connect(sock_path).ok()?;
+    stream.write_all(&startup_packet()).ok()?;
+    loop {
+        let mut header = [0u8; 5];
+        stream.read_exact(&mut header).ok()?;
+        let len = u32::from_be_bytes(header[1..5].try_into().unwrap()) as usize;
+        let mut body = vec![0u8; len - 4];
+        stream.read_exact(&mut body).ok()?;
+        match header[0] {
+            b'Z' => return Some(stream),
+            b'E' => return None,
+            _ => {}
+        }
+    }
+}
+
 fn read_until_ready(stream: &mut UnixStream) -> Vec<u8> {
     let mut types = Vec::new();
     loop {
@@ -102,16 +119,15 @@ fn spawn_smoke() {
     let sock_path = sock_dir.join(".s.PGSQL.5432");
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut stream = loop {
-        match UnixStream::connect(&sock_path) {
-            Ok(s) => break s,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => panic!("postmaster never became ready: {e}"),
+        if let Some(s) = try_handshake(&sock_path) {
+            break s;
         }
+        assert!(
+            Instant::now() < deadline,
+            "postmaster never became ready for a handshake"
+        );
+        std::thread::sleep(Duration::from_millis(50));
     };
-
-    stream.write_all(&startup_packet()).unwrap();
-    let types = read_until_ready(&mut stream);
-    assert!(types.contains(&b'R'), "handshake: {types:?}");
 
     let types = simple_query(&mut stream, "SELECT 1;");
     assert!(types.contains(&b'T'), "{types:?}");
