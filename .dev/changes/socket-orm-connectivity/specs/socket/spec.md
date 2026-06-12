@@ -23,17 +23,17 @@ When built with `socket`, the system SHALL expose `PGlite::serve_unix_socket() -
 
 ### Requirement: Frame pump and session semantics
 
-The gateway SHALL serve one client at a time, forwarding accumulated frontend frames to the engine at simple-query, function-call and extended-protocol Sync boundaries, with mid-COPY-IN continuation bounded by CopyDone/CopyFail; it SHALL hold the engine lock per batch (not per session), forward responses verbatim, and side-channel NotificationResponse frames to registered Rust listeners. Terminate SHALL end the session and the gateway SHALL accept the next client.
+The gateway SHALL serve one client at a time, forwarding accumulated frontend frames to the engine at simple-query, function-call, extended-protocol Sync, CopyDone and CopyFail boundaries; it SHALL hold the engine lock per batch (not per session), forward responses verbatim, and side-channel NotificationResponse frames to registered Rust listeners. Terminate SHALL end the session and the gateway SHALL accept the next client. COPY TO STDOUT SHALL be supported; COPY FROM STDIN is unsupported through the gateway (the in-process engine cannot pause mid-COPY across roundtrips) and SHALL be documented as such.
 
 #### Scenario: Extended protocol round-trip
 
 - WHEN a client sends Parse/Bind/Describe/Execute/Sync
 - THEN the gateway returns the full extended-protocol response
 
-#### Scenario: COPY IN completes
+#### Scenario: COPY OUT completes
 
-- WHEN a client issues COPY FROM STDIN then CopyData and CopyDone frames
-- THEN the rows are stored and the response ends with ReadyForQuery
+- WHEN a client issues COPY ... TO STDOUT
+- THEN all CopyData frames and the final ReadyForQuery arrive in one response
 
 #### Scenario: Second client after disconnect
 

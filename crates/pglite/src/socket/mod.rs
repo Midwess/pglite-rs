@@ -143,7 +143,6 @@ fn serve_client(
         .map_err(Error::Io)?;
 
     let mut pending: Vec<u8> = Vec::new();
-    let mut ready = true;
     loop {
         let mut tag = [0u8; 1];
         match stream.read_exact(&mut tag) {
@@ -173,12 +172,7 @@ fn serve_client(
         pending.extend_from_slice(&len_buf);
         pending.extend_from_slice(&frame);
 
-        let flush = if ready {
-            matches!(tag[0], b'Q' | b'F' | b'S')
-        } else {
-            matches!(tag[0], b'c' | b'f')
-        };
-        if !flush {
+        if !matches!(tag[0], b'Q' | b'F' | b'S' | b'c' | b'f') {
             continue;
         }
         let batch = std::mem::take(&mut pending);
@@ -186,21 +180,9 @@ fn serve_client(
             let _guard = db.lock_for_transaction().await;
             db.route(crate::db::Via::backend(), batch).await
         })?;
-        ready = ends_ready(&response);
         db.dispatch_notifications(&response);
         stream.write_all(&response).map_err(Error::Io)?;
     }
-}
-
-fn ends_ready(response: &[u8]) -> bool {
-    let mut offset = 0;
-    let mut last = 0u8;
-    while offset + 5 <= response.len() {
-        last = response[offset];
-        let len = u32::from_be_bytes(response[offset + 1..offset + 5].try_into().unwrap()) as usize;
-        offset += 1 + len.max(4);
-    }
-    last == b'Z'
 }
 
 fn read_startup(stream: &mut UnixStream) -> Result<(), Error> {

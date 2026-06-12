@@ -57,9 +57,18 @@ fn connect(gateway_path: &std::path::Path) -> UnixStream {
 }
 
 #[test]
-fn gateway_serves_wire_clients() {
+fn gateway_end_to_end() {
     block_on(async {
         let db = PGlite::open_temp().await.unwrap();
+        serves_wire_clients(&db).await;
+        extended_protocol_and_copy(&db).await;
+        drop_unblocks_connected_session(&db).await;
+        db.close().await.unwrap();
+    });
+}
+
+async fn serves_wire_clients(db: &PGlite) {
+    {
         let gateway = db.serve_unix_socket().await.unwrap();
         assert!(gateway.uri().starts_with("postgresql://"));
 
@@ -90,7 +99,89 @@ fn gateway_serves_wire_clients() {
         let sock_dir = gateway.socket_path().parent().unwrap().to_path_buf();
         drop(gateway);
         assert!(!sock_dir.exists(), "socket dir must be removed on drop");
+    }
+}
 
-        db.close().await.unwrap();
-    });
+async fn extended_protocol_and_copy(db: &PGlite) {
+    {
+        db.exec("CREATE TABLE ext (id INT, label TEXT)")
+            .await
+            .unwrap();
+        db.exec("INSERT INTO ext VALUES (7, 'seven')")
+            .await
+            .unwrap();
+        let gateway = db.serve_unix_socket().await.unwrap();
+        let mut client = connect(gateway.socket_path());
+
+        let mut batch = Vec::new();
+        let query = b"SELECT label FROM ext WHERE id = 7\0";
+        batch.push(b'P');
+        batch.extend_from_slice(&((4 + 1 + query.len() + 2) as u32).to_be_bytes());
+        batch.push(0);
+        batch.extend_from_slice(query);
+        batch.extend_from_slice(&0u16.to_be_bytes());
+        batch.push(b'B');
+        batch.extend_from_slice(&((4 + 1 + 1 + 2 + 2 + 2) as u32).to_be_bytes());
+        batch.push(0);
+        batch.push(0);
+        batch.extend_from_slice(&0u16.to_be_bytes());
+        batch.extend_from_slice(&0u16.to_be_bytes());
+        batch.extend_from_slice(&0u16.to_be_bytes());
+        batch.push(b'D');
+        batch.extend_from_slice(&((4 + 1 + 1) as u32).to_be_bytes());
+        batch.push(b'P');
+        batch.push(0);
+        batch.push(b'E');
+        batch.extend_from_slice(&((4 + 1 + 4) as u32).to_be_bytes());
+        batch.push(0);
+        batch.extend_from_slice(&0u32.to_be_bytes());
+        batch.push(b'S');
+        batch.extend_from_slice(&4u32.to_be_bytes());
+        client.write_all(&batch).unwrap();
+
+        let frames = read_until_ready(&mut client);
+        let tags: Vec<u8> = frames.iter().map(|(t, _)| *t).collect();
+        assert!(tags.contains(&b'1'), "ParseComplete missing: {tags:?}");
+        assert!(tags.contains(&b'2'), "BindComplete missing: {tags:?}");
+        assert!(tags.contains(&b'D'), "DataRow missing: {tags:?}");
+        let row = frames.iter().find(|(t, _)| *t == b'D').unwrap();
+        assert!(String::from_utf8_lossy(&row.1).contains("seven"));
+
+        db.exec("CREATE TABLE cp (name TEXT, legs INT)")
+            .await
+            .unwrap();
+        db.copy_in("COPY cp FROM STDIN", b"rex\t4\ntweety\t2\n")
+            .await
+            .unwrap();
+        let frames = simple_query(&mut client, "COPY cp TO STDOUT");
+        let copied: Vec<u8> = frames
+            .iter()
+            .filter(|(t, _)| *t == b'd')
+            .flat_map(|(_, body)| body.clone())
+            .collect();
+        assert_eq!(copied, b"rex\t4\ntweety\t2\n");
+
+        let frames = simple_query(&mut client, "SELECT 1");
+        assert!(frames.iter().any(|(t, _)| *t == b'D'));
+
+        drop(client);
+        gateway.shutdown().unwrap();
+    }
+}
+
+async fn drop_unblocks_connected_session(db: &PGlite) {
+    {
+        let gateway = db.serve_unix_socket().await.unwrap();
+        let sock_dir = gateway.socket_path().parent().unwrap().to_path_buf();
+
+        let client = connect(gateway.socket_path());
+        let started = std::time::Instant::now();
+        drop(gateway);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "drop must return within the bounded join window"
+        );
+        assert!(!sock_dir.exists());
+        drop(client);
+    }
 }
