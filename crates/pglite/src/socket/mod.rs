@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -138,6 +139,54 @@ fn serve_client(
     Ok(())
 }
 
-fn synth_startup_reply(_server_version: &str) -> Vec<u8> {
-    Vec::new()
+fn read_startup(stream: &mut UnixStream) -> Result<(), Error> {
+    loop {
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).map_err(Error::Io)?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        if !(8..=10_000).contains(&len) {
+            return Err(Error::Protocol(format!("invalid startup length {len}")));
+        }
+        let mut body = vec![0u8; len - 4];
+        stream.read_exact(&mut body).map_err(Error::Io)?;
+        let code = u32::from_be_bytes(body[0..4].try_into().unwrap());
+        match code {
+            80877103 | 80877104 => stream.write_all(b"N").map_err(Error::Io)?,
+            196608 => return Ok(()),
+            other => return Err(Error::Protocol(format!("unsupported startup code {other}"))),
+        }
+    }
+}
+
+fn synth_startup_reply(server_version: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(b'R');
+    out.extend_from_slice(&8u32.to_be_bytes());
+    out.extend_from_slice(&0u32.to_be_bytes());
+    for (key, value) in [
+        ("server_version", server_version),
+        ("server_encoding", "UTF8"),
+        ("client_encoding", "UTF8"),
+        ("standard_conforming_strings", "on"),
+        ("integer_datetimes", "on"),
+        ("DateStyle", "ISO, MDY"),
+        ("TimeZone", "UTC"),
+        ("is_superuser", "on"),
+    ] {
+        out.push(b'S');
+        let len = 4 + key.len() + 1 + value.len() + 1;
+        out.extend_from_slice(&(len as u32).to_be_bytes());
+        out.extend_from_slice(key.as_bytes());
+        out.push(0);
+        out.extend_from_slice(value.as_bytes());
+        out.push(0);
+    }
+    out.push(b'K');
+    out.extend_from_slice(&12u32.to_be_bytes());
+    out.extend_from_slice(&1u32.to_be_bytes());
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.push(b'Z');
+    out.extend_from_slice(&5u32.to_be_bytes());
+    out.push(b'I');
+    out
 }
