@@ -17,6 +17,15 @@ pgl_native_setup(void)
 	}
 }
 
+int
+pgl_native_setitimer(int which, const void *new_value, void *old_value)
+{
+	(void) which;
+	(void) new_value;
+	(void) old_value;
+	return 0;
+}
+
 #define PGL_TRAMP_MAX 8
 
 static sigjmp_buf pgl_tramp[PGL_TRAMP_MAX];

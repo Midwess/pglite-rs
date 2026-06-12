@@ -44,7 +44,8 @@ PGLITE_DEFS="-D__PGLITE__ \
 -Drecv=pgl_recv -Dsend=pgl_send -Dconnect=pgl_connect \
 -Dpoll=pgl_poll \
 -Dshmget=pgl_shmget -Dshmat=pgl_shmat -Dshmdt=pgl_shmdt -Dshmctl=pgl_shmctl \
--Dlongjmp=pgl_longjmp -Dsiglongjmp=pgl_siglongjmp"
+-Dlongjmp=pgl_longjmp -Dsiglongjmp=pgl_siglongjmp \
+-Dsetitimer=pgl_native_setitimer"
 
 NPROC="$( (command -v nproc >/dev/null 2>&1 && nproc) || sysctl -n hw.ncpu )"
 

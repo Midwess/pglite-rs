@@ -55,6 +55,8 @@ pub(crate) enum EngineCommand {
 pub(crate) struct Engine {
     data_dir: PathBuf,
     runtime_dir: PathBuf,
+    boot_strings: Vec<CString>,
+    boot_argv: Vec<*mut c_char>,
 }
 
 impl Engine {
@@ -73,6 +75,8 @@ impl Engine {
                 let mut engine = Engine {
                     data_dir,
                     runtime_dir: Self::runtime_dir(),
+                    boot_strings: Vec::new(),
+                    boot_argv: Vec::new(),
                 };
                 match engine.boot() {
                     Ok(()) => {
@@ -91,7 +95,11 @@ impl Engine {
 
     fn runtime_dir() -> PathBuf {
         std::env::var("PGLITE_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| {
-            std::env::temp_dir().join(format!("pglite-rs-runtime-{}", env!("CARGO_PKG_VERSION")))
+            std::env::temp_dir().join(format!(
+                "pglite-rs-runtime-{}-{}",
+                env!("CARGO_PKG_VERSION"),
+                crate::RUNTIME_TAR.len()
+            ))
         })
     }
 
@@ -156,8 +164,8 @@ impl Engine {
         std::env::set_var("PGCLIENTENCODING", "UTF8");
         std::env::set_var("LANG", "C");
 
-        let bin = CString::new(self.runtime_dir.join("bin/postgres").to_str().unwrap()).unwrap();
-        let pgdata = CString::new(self.data_dir.to_str().unwrap()).unwrap();
+        self.boot_strings.push(CString::new(self.runtime_dir.join("bin/postgres").to_str().unwrap()).unwrap());
+        self.boot_strings.push(CString::new(self.data_dir.to_str().unwrap()).unwrap());
         let devnull = CString::new("/dev/null").unwrap();
         let rmode = CString::new("r").unwrap();
 
@@ -184,6 +192,10 @@ impl Engine {
         .iter()
         .map(|s| CString::new(*s).unwrap())
         .collect();
+        self.boot_strings.extend(args);
+        let bin = &self.boot_strings[0];
+        let pgdata = &self.boot_strings[1];
+        let args = &self.boot_strings[2..];
 
         let rc = unsafe {
             pglite_sys::pgl_native_setup();
@@ -191,16 +203,15 @@ impl Engine {
             pglite_sys::pgl_set_rw_cbs(read_cb, write_cb);
             pglite_sys::pgl_setPGliteActive(1);
 
-            let mut argv: Vec<*mut c_char> = Vec::new();
-            argv.push(bin.as_ptr() as *mut c_char);
-            argv.extend(args.iter().map(|a| a.as_ptr() as *mut c_char));
-            argv.push(c"-D".as_ptr() as *mut c_char);
-            argv.push(pgdata.as_ptr() as *mut c_char);
-            argv.push(c"postgres".as_ptr() as *mut c_char);
-            let argc = argv.len() as c_int;
-            argv.push(std::ptr::null_mut());
+            self.boot_argv.push(bin.as_ptr() as *mut c_char);
+            self.boot_argv.extend(args.iter().map(|a| a.as_ptr() as *mut c_char));
+            self.boot_argv.push(c"-D".as_ptr() as *mut c_char);
+            self.boot_argv.push(pgdata.as_ptr() as *mut c_char);
+            self.boot_argv.push(c"postgres".as_ptr() as *mut c_char);
+            let argc = self.boot_argv.len() as c_int;
+            self.boot_argv.push(std::ptr::null_mut());
 
-            pglite_sys::pgl_native_call(pglite_sys::pgl_backend_main, argc, argv.as_mut_ptr())
+            pglite_sys::pgl_native_call(pglite_sys::pgl_backend_main, argc, self.boot_argv.as_mut_ptr())
         };
         if rc != 99 {
             return Err(Error::Boot(format!("backend main returned {rc}, expected 99")));
@@ -240,16 +251,25 @@ impl Engine {
     }
 
     fn extract_runtime(&self) -> Result<(), Error> {
-        let marker = self.runtime_dir.join(".extracted");
-        let stamp = crate::RUNTIME_TAR.len().to_string();
-        if std::fs::read_to_string(&marker).is_ok_and(|m| m == stamp) {
+        if self.runtime_dir.join(".extracted").exists() {
             return Ok(());
         }
-        let _ = std::fs::remove_dir_all(&self.runtime_dir);
-        std::fs::create_dir_all(&self.runtime_dir)?;
+        let staging = self.runtime_dir.with_file_name(format!(
+            "{}.staging-{}",
+            self.runtime_dir.file_name().unwrap().to_string_lossy(),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging)?;
         let mut archive = tar::Archive::new(crate::RUNTIME_TAR);
-        archive.unpack(&self.runtime_dir)?;
-        std::fs::write(&marker, stamp)?;
+        archive.unpack(&staging)?;
+        std::fs::write(staging.join(".extracted"), b"")?;
+        if std::fs::rename(&staging, &self.runtime_dir).is_err() {
+            let _ = std::fs::remove_dir_all(&staging);
+            if !self.runtime_dir.join(".extracted").exists() {
+                return Err(Error::Boot("runtime extraction race lost and target invalid".into()));
+            }
+        }
         Ok(())
     }
 
