@@ -1,0 +1,12 @@
+[package]
+name = "pglite-sys"
+description = "Raw FFI bindings to libpglite, the in-process PostgreSQL engine from postgres-pglite"
+links = "pglite"
+build = "build.rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libc = "0.2"
