@@ -5,7 +5,7 @@ mod live;
 mod row;
 mod transaction;
 
-pub use db::{PGlite, PGliteOptions};
+pub use db::{LocaleProvider, PGlite, PGliteOptions};
 pub use error::Error;
 pub use live::LiveQuery;
 pub use postgres_types::{FromSql, ToSql};

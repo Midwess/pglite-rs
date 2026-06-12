@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 
 use futures::channel::oneshot;
 
-use crate::db::PGliteOptions;
+use crate::db::{LocaleProvider, PGliteOptions};
 use crate::error::Error;
 
 thread_local! {
@@ -319,18 +319,14 @@ impl Engine {
         if self.data_dir.join("PG_VERSION").exists() {
             return Ok(());
         }
+        let locale_args: &[&str] = match self.options.locale_provider {
+            LocaleProvider::Libc => &["--locale=C", "--locale-provider=libc"],
+            LocaleProvider::Icu => &["--locale=C", "--locale-provider=icu", "--icu-locale=en"],
+        };
         let output = Command::new(self.runtime_dir.join("bin/initdb"))
-            .args([
-                "--allow-group-access",
-                "--encoding",
-                "UTF8",
-                "--locale=C",
-                "--locale-provider=libc",
-                "--auth=trust",
-                "-U",
-                &self.options.username,
-                "-D",
-            ])
+            .args(["--allow-group-access", "--encoding", "UTF8"])
+            .args(locale_args)
+            .args(["--auth=trust", "-U", &self.options.username, "-D"])
             .arg(&self.data_dir)
             .env("TZ", "UTC")
             .output()?;

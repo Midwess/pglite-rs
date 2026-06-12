@@ -19,12 +19,20 @@ use crate::row::{Column, Row};
 
 static OPEN: AtomicBool = AtomicBool::new(false);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LocaleProvider {
+    #[default]
+    Libc,
+    Icu,
+}
+
 #[derive(Clone, Debug)]
 pub struct PGliteOptions {
     pub username: String,
     pub database: String,
     pub relaxed_durability: bool,
     pub start_params: Vec<String>,
+    pub locale_provider: LocaleProvider,
 }
 
 impl Default for PGliteOptions {
@@ -34,6 +42,7 @@ impl Default for PGliteOptions {
             database: "postgres".into(),
             relaxed_durability: false,
             start_params: Vec::new(),
+            locale_provider: LocaleProvider::default(),
         }
     }
 }

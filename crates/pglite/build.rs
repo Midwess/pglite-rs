@@ -69,11 +69,21 @@ fn main() {
     ]);
 }
 
+fn variant_subdir() -> &'static str {
+    if env::var("CARGO_FEATURE_ICU").is_ok() {
+        "icu"
+    } else {
+        ""
+    }
+}
+
 fn resolve_lib_dir() -> PathBuf {
     if let Ok(dir) = env::var("PGLITE_LIB_DIR") {
         return PathBuf::from(dir);
     }
-    let local = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../native/out");
+    let local = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../native/out")
+        .join(variant_subdir());
     if local.join("pglite-runtime.tar").exists() {
         return local;
     }
@@ -87,6 +97,7 @@ fn cache_dir() -> PathBuf {
         .join(".cache/pglite-rs")
         .join(ENGINE_TAG)
         .join(env::var("TARGET").unwrap())
+        .join(variant_subdir())
 }
 
 fn resolve_ext_tar(name: &str, target: &str, lib_dir: &Path) -> PathBuf {

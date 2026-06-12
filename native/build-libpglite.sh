@@ -4,9 +4,22 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/postgres-pglite"
 OUT="$ROOT/native/out"
+CC="${CC:-clang}"
+
+ICU_CONFIGURE="--without-icu"
+ICU_ARCHIVES=""
+if [ "${WITH_ICU:-}" = "1" ]; then
+  OUT="$OUT/icu"
+  ICU_CONFIGURE="--with-icu"
+  if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+    export PKG_CONFIG_PATH="$(brew --prefix icu4c)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+  fi
+  ICU_LIBDIR="$(pkg-config --variable=libdir icu-uc)"
+  ICU_ARCHIVES="$ICU_LIBDIR/libicui18n.a $ICU_LIBDIR/libicuuc.a $ICU_LIBDIR/libicudata.a"
+fi
+
 BUILD="$OUT/build"
 PREFIX="$OUT/install"
-CC="${CC:-clang}"
 
 mkdir -p "$BUILD" "$PREFIX"
 
@@ -23,11 +36,12 @@ fi
 
 "$CC" -O2 -fPIC $PGLITEC_COMPAT -Dexit=pgl_native_exit -c "$SRC/pglite/src/pglitec/pglitec.c" -o "$OUT/pglitec.o"
 "$CC" -O2 -fPIC -I"$ROOT/native" -c "$ROOT/native/pglite_native.c" -o "$OUT/pglite_native.o"
+"$CC" -O2 -fPIC -I"$ROOT/native" -c "$ROOT/native/pglite_reset.c" -o "$OUT/pglite_reset.o"
 
 if [ ! -f "$BUILD/config.status" ]; then
   (cd "$BUILD" && "$SRC/configure" \
     --prefix="$PREFIX" \
-    --without-icu \
+    "$ICU_CONFIGURE" \
     --without-readline \
     --with-zlib \
     CFLAGS="-O2 -fPIC")
@@ -68,14 +82,15 @@ BACKEND_OBJS="$(cd "$BUILD" && cat $(find src/backend src/timezone -name objfile
 if [ "$(uname)" = "Darwin" ]; then
   (cd "$BUILD" && libtool -static -o "$OUT/libpglite.a" $BACKEND_OBJS \
     src/common/libpgcommon_srv.a src/port/libpgport_srv.a \
-    "$OUT/pglitec.o" "$OUT/pglite_native.o")
+    "$OUT/pglitec.o" "$OUT/pglite_native.o" "$OUT/pglite_reset.o" $ICU_ARCHIVES)
 else
   (cd "$BUILD" && {
     echo "create $OUT/libpglite.a"
     for o in $BACKEND_OBJS; do echo "addmod $o"; done
     echo "addlib src/common/libpgcommon_srv.a"
     echo "addlib src/port/libpgport_srv.a"
-    echo "addmod $OUT/pglitec.o"; echo "addmod $OUT/pglite_native.o"
+    echo "addmod $OUT/pglitec.o"; echo "addmod $OUT/pglite_native.o"; echo "addmod $OUT/pglite_reset.o"
+    for a in $ICU_ARCHIVES; do echo "addlib $a"; done
     echo "save"
     echo "end"
   } | ar -M)

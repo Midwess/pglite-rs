@@ -14,8 +14,30 @@ fn main() {
     println!("cargo:rustc-link-lib=z");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
+        if env::var("CARGO_FEATURE_ICU").is_ok() {
+            println!("cargo:rustc-link-lib=c++");
+        }
     } else {
         println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
+        if env::var("CARGO_FEATURE_ICU").is_ok() {
+            println!("cargo:rustc-link-lib=stdc++");
+        }
+    }
+}
+
+fn variant_subdir() -> &'static str {
+    if env::var("CARGO_FEATURE_ICU").is_ok() {
+        "icu"
+    } else {
+        ""
+    }
+}
+
+fn asset_stem() -> &'static str {
+    if env::var("CARGO_FEATURE_ICU").is_ok() {
+        "pglite-icu"
+    } else {
+        "pglite"
     }
 }
 
@@ -24,7 +46,9 @@ fn resolve_lib_dir() -> PathBuf {
         return PathBuf::from(dir);
     }
 
-    let local = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../native/out");
+    let local = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../native/out")
+        .join(variant_subdir());
     if local.join("libpglite.a").exists() {
         return local;
     }
@@ -39,14 +63,15 @@ fn download_prebuilt() -> PathBuf {
         .unwrap_or_else(|_| env::temp_dir())
         .join(".cache/pglite-rs")
         .join(ENGINE_TAG)
-        .join(&target);
+        .join(&target)
+        .join(variant_subdir());
 
     if cache.join("libpglite.a").exists() {
         return cache;
     }
     std::fs::create_dir_all(&cache).expect("cannot create cache dir");
 
-    let asset = format!("pglite-{target}.tar.gz");
+    let asset = format!("{}-{target}.tar.gz", asset_stem());
     let url = format!("{RELEASE_BASE}/{ENGINE_TAG}/{asset}");
     let tarball = cache.join(&asset);
 
