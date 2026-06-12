@@ -1,0 +1,18 @@
+--- a/src/backend/main/main.c
++++ b/src/backend/main/main.c
+@@ -405,6 +405,7 @@
+ 		exit(1);
+ 	}
+ #else							/* WIN32 */
++#ifndef __PGLITE__
+ 	if (pgwin32_is_admin())
+ 	{
+ 		write_stderr("Execution of PostgreSQL by a user with administrative permissions is not\n"
+@@ -414,6 +415,7 @@
+ 					 "more information on how to properly start the server.\n");
+ 		exit(1);
+ 	}
++#endif							/* !__PGLITE__ */
+ #endif							/* WIN32 */
+ }
+ 
