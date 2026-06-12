@@ -186,7 +186,12 @@ struct TempDataDir(std::path::PathBuf);
 
 impl Drop for TempDataDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        for _ in 0..20 {
+            if std::fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }
 
