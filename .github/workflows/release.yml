@@ -48,9 +48,9 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           path-type: inherit
-          pacboy: toolchain:p zlib:p
+          pacboy: toolchain:p zlib:p clang:p
           install: bison flex make perl git diffutils
 
       - name: Cache engine build
@@ -82,9 +82,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          rustup target add x86_64-pc-windows-gnu
-          export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=gcc
-          cargo test -p pglite-rs -p pglite-rs-sys --target x86_64-pc-windows-gnu
+          rustup target add x86_64-pc-windows-gnullvm
+          export CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER=clang
+          cargo test -p pglite-rs -p pglite-rs-sys --target x86_64-pc-windows-gnullvm
 
       - name: Stage lib-crate payload
         shell: bash
