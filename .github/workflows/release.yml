@@ -28,6 +28,10 @@ jobs:
             target: x86_64-pc-windows-gnu
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Force LF checkout (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf input
+
       - uses: actions/checkout@v4
         with:
           submodules: true

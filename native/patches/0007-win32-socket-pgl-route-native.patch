@@ -1,0 +1,23 @@
+--- a/src/include/port/win32_port.h
++++ b/src/include/port/win32_port.h
+@@ -489,10 +489,19 @@
+ #define bind(s, addr, addrlen) pgwin32_bind(s, addr, addrlen)
+ #define listen(s, backlog) pgwin32_listen(s, backlog)
+ #define accept(s, addr, addrlen) pgwin32_accept(s, addr, addrlen)
+-#define connect(s, name, namelen) pgwin32_connect(s, name, namelen)
+ #define select(n, r, w, e, timeout) pgwin32_select(n, r, w, e, timeout)
++#ifdef __PGLITE__
++extern int	pgl_connect(int s, const struct sockaddr *name, int namelen);
++extern ssize_t pgl_recv(int s, void *buf, size_t len, int flags);
++extern ssize_t pgl_send(int s, const void *buf, size_t len, int flags);
++#define connect(s, name, namelen) pgl_connect((int) (s), name, (int) (namelen))
++#define recv(s, buf, len, flags) pgl_recv((int) (s), buf, len, flags)
++#define send(s, buf, len, flags) pgl_send((int) (s), buf, len, flags)
++#else
++#define connect(s, name, namelen) pgwin32_connect(s, name, namelen)
+ #define recv(s, buf, len, flags) pgwin32_recv(s, buf, len, flags)
+ #define send(s, buf, len, flags) pgwin32_send(s, buf, len, flags)
++#endif
+ 
+ extern SOCKET pgwin32_socket(int af, int type, int protocol);
+ extern int	pgwin32_bind(SOCKET s, struct sockaddr *addr, int addrlen);
