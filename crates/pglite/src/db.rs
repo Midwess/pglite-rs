@@ -52,6 +52,7 @@ impl Drop for CloseOnDrop {
 }
 
 type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
+type ListenerMap = HashMap<String, Vec<NotificationCallback>>;
 
 #[derive(Clone)]
 pub struct PGlite {
@@ -59,7 +60,8 @@ pub struct PGlite {
     data_dir: Arc<std::path::PathBuf>,
     _handle: Arc<JoinHandle<()>>,
     tx_lock: Arc<Mutex<()>>,
-    listeners: Arc<std::sync::Mutex<HashMap<String, NotificationCallback>>>,
+    listeners: Arc<std::sync::Mutex<ListenerMap>>,
+    live_triggers: Arc<std::sync::Mutex<std::collections::HashSet<(u32, u32)>>>,
     _temp_dir: Option<Arc<TempDataDir>>,
     _close: Arc<CloseOnDrop>,
 }
@@ -141,6 +143,7 @@ impl PGlite {
                 _handle: Arc::new(handle),
                 tx_lock: Arc::new(Mutex::new(())),
                 listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                live_triggers: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
                 _temp_dir: temp_dir,
             }),
             Ok(Err(e)) => {
@@ -180,7 +183,9 @@ impl PGlite {
         self.listeners
             .lock()
             .unwrap()
-            .insert(channel.to_lowercase(), Box::new(callback));
+            .entry(channel.to_lowercase())
+            .or_default()
+            .push(Box::new(callback));
         self.exec_unlocked(&format!("LISTEN \"{}\"", channel.replace('"', "\"\"")))
             .await
     }
@@ -358,6 +363,10 @@ impl PGlite {
         Ok(rows)
     }
 
+    pub(crate) fn live_triggers(&self) -> &std::sync::Mutex<std::collections::HashSet<(u32, u32)>> {
+        &self.live_triggers
+    }
+
     pub(crate) async fn lock_for_transaction(&self) -> futures::lock::MutexGuard<'_, ()> {
         self.tx_lock.lock().await
     }
@@ -399,8 +408,10 @@ impl PGlite {
                         .message()
                         .map_err(|e| Error::Protocol(e.to_string()))?
                         .to_string();
-                    if let Some(callback) = self.listeners.lock().unwrap().get(&channel) {
-                        callback(&payload);
+                    if let Some(callbacks) = self.listeners.lock().unwrap().get(&channel) {
+                        for callback in callbacks {
+                            callback(&payload);
+                        }
                     }
                 }
                 _ => {}

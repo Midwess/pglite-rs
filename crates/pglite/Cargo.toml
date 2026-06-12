@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 pglite-sys = { path = "../pglite-sys" }
-futures = "0.3"
+futures = { version = "0.3", features = ["executor"] }
 postgres-protocol = "0.6"
 postgres-types = "0.2"
 thiserror = "2"
