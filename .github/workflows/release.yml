@@ -50,7 +50,7 @@ jobs:
         with:
           msystem: UCRT64
           path-type: inherit
-          pacboy: toolchain:p zlib:p clang:p
+          pacboy: toolchain:p zlib:p clang:p libunwind:p
           install: bison flex make perl git diffutils
 
       - name: Cache engine build
