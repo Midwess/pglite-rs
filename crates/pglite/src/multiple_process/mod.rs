@@ -58,7 +58,7 @@ impl Default for MultiProcessOptions {
 pub(crate) struct Server {
     child: Mutex<Child>,
     pid: i32,
-    sock_dir: PathBuf,
+    pub(crate) sock_dir: PathBuf,
     pub(crate) sock_path: PathBuf,
 }
 
@@ -69,7 +69,7 @@ impl Server {
         options: &MultiProcessOptions,
         pool_size: usize,
     ) -> Result<Arc<Server>, Error> {
-        let sock_dir = std::env::temp_dir().join(format!(
+        let sock_dir = Engine::ram_backed_dir().join(format!(
             "pgl-{}-{}",
             std::process::id(),
             INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst)

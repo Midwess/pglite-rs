@@ -113,6 +113,21 @@ impl Engine {
             })
     }
 
+    pub(crate) fn ram_backed_dir() -> PathBuf {
+        if cfg!(target_os = "linux") {
+            let shm = Path::new("/dev/shm");
+            if shm.is_dir()
+                && shm
+                    .metadata()
+                    .map(|m| !m.permissions().readonly())
+                    .unwrap_or(false)
+            {
+                return shm.to_path_buf();
+            }
+        }
+        std::env::temp_dir()
+    }
+
     fn runtime_fingerprint() -> u64 {
         let mut hash: u64 = 0xcbf29ce484222325;
         for chunk in crate::RUNTIME_TAR.chunks(8) {
