@@ -1,6 +1,6 @@
 # Proposal: Replica Mode — PGlite as a Read-Only Logical Replica of an Upstream Postgres
 
-**Status**: draft
+**Status**: approved
 
 ## Summary
 

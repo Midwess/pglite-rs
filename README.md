@@ -30,6 +30,7 @@ Also included: `PGliteOptions` (custom user/database, relaxed durability, server
 | `pgcrypto` | the pgcrypto extension — digests, encryption (needs OpenSSL at artifact-build time only) |
 | `icu` | ICU engine variant — real Unicode collation via `locale_provider: Icu` (~+40MB, statically bundled) |
 | `multiple-process` | `PGlite::open_multi_process` — a child postmaster with pooled connections for true concurrent sessions (parallel transactions, cross-session locks), same API, no networking |
+| `socket` | `PGlite::serve_unix_socket` — a unix-socket gateway so unmodified ORMs (SQLx, SeaORM, Diesel) talk to the in-process engine |
 
 Extension features require one linker flag in the consuming binary so the dlopen'd modules can resolve engine symbols — add to your crate's `build.rs`:
 
@@ -45,6 +46,36 @@ fn main() {
 ICU note: a data directory initialized with `locale_provider: Icu` can only be opened by `icu`-feature builds, and vice-versa for libc datadirs.
 
 Runtime-agnostic: futures work on tokio, smol, async-std, or plain `futures::executor::block_on`. The crate depends on `futures`, never on a specific runtime.
+
+## Using ORMs
+
+ORMs speak the Postgres wire protocol over connections they open themselves, so pglite-rs meets them at a unix socket — a RAM kernel pipe with a filesystem nameplate, no TCP, no networking.
+
+**Multi-process mode** (recommended for ORMs — real concurrent sessions): the child postmaster already listens on a private socket; hand its address to any driver.
+
+```rust
+let db = PGlite::open_multi_process("./data", MultiProcessOptions::default()).await?;
+let url = db.connection_uri().unwrap();
+
+let pool = sqlx::postgres::PgPoolOptions::new().connect(&url).await?;          // SQLx
+let conn = sea_orm::Database::connect(&url).await?;                            // SeaORM
+let mut pg = diesel::PgConnection::establish(&url)?;                           // Diesel
+```
+
+External clients get `extra_connections` postmaster slots (default 4) — size it to your ORM pool via `MultiProcessOptions`. The socket lives until `close()`/drop; connect after open, disconnect before close.
+
+**In-process mode** (`socket` feature): no server exists, so a gateway thread fakes one.
+
+```rust
+let db = PGlite::open("./data").await?;
+let gateway = db.serve_unix_socket().await?;
+let pool = sqlx::postgres::PgPoolOptions::new()
+    .max_connections(1)
+    .connect(gateway.uri())
+    .await?;
+```
+
+The engine holds a single session, so set the ORM pool size to exactly 1, and know that the ORM and the Rust API share that session: a `db.exec` issued while the ORM holds an open transaction executes inside it. `COPY ... TO STDOUT` works through the gateway; `COPY ... FROM STDIN` does not (in-process engine cannot pause mid-COPY) — use multi-process mode for bulk loads. The gateway cleans up fully on drop.
 
 ## How it works
 

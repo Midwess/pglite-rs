@@ -1,6 +1,6 @@
 # Tasks: socket-orm-connectivity
 
-## Progress: [12/14]
+## Progress: [14/14]
 
 ## 1. Part A foundations
 
@@ -25,12 +25,12 @@
 
 - [x] 4.1 tests/socket_gateway.rs: handshake, SELECT 1, extended protocol (Parse/Bind/Describe/Execute/Sync), COPY IN, Terminate, second client, Rust-API interleave
 - [x] 4.2 Drop-clean asserts: sock dir gone, doorman joined
-- [ ] 4.3 CI socket feature leg
+- [x] 4.3 CI socket feature leg
 
 ## 5. Docs + analysis
 
-- [ ] 5.1 README ORM section: SQLx/SeaORM/Diesel URI snippets (MP) + gateway snippet (pool-size-1 warning, transaction-sharing note)
-- [ ] 5.2 CONTEXT.md + project.md Latest Analysis updates
+- [x] 5.1 README ORM section: SQLx/SeaORM/Diesel URI snippets (MP) + gateway snippet (pool-size-1 warning, transaction-sharing note)
+- [x] 5.2 CONTEXT.md + project.md Latest Analysis updates
 
 ---
 

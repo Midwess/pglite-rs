@@ -120,6 +120,7 @@ Last updated: 2026-06-13 — change `socket-orm-connectivity` (previous: replica
 - process_response unusable in the pump (errors on ErrorResponse = normal ORM traffic) — separate notify-only dispatch_notifications helper
 - Drop-clean contract formalized: Drop alone reclaims (flag + self-connect wake + bounded join + dir removal); NotifyConn reader-thread leak identified and fixed via Shutdown::Both at Pool teardown
 - Socket dirs RAM-backed: /dev/shm when linux+writable else temp_dir; socket payload is kernel RAM on every Unix regardless (nameplate-only on disk)
+- Implementation outcome: COPY FROM STDIN cannot cross gateway roundtrips in-process — pump-input drain mid-COPY makes the read callback signal EOF and the backend FATALs with "protocol synchronization was lost" (engine semantics; copy_in batches Q+d+c in one roundtrip to avoid it). Gateway supports COPY OUT; COPY IN documented unsupported — MP native socket covers it. Test binaries get one in-process instance (one-boot latch) → gateway tests share a single #[test]
 
 ### replica-mode Analysis Additions
 - Crate is tokio-free by design; replication client is hand-rolled: dedicated `pglite-replica` OS thread + std TcpStream + `postgres-protocol` (SCRAM present at `authentication::sasl`), mirroring the engine-thread precedent (mpsc in, oneshot boot result)

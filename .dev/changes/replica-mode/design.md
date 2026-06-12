@@ -44,10 +44,10 @@ One new module `crates/pglite/src/replica/` (mod, wire, pgoutput, meta, backfill
 **Context:** Initial copy and stream start must align with zero gap and zero overlap.
 **Decision:** `CREATE_REPLICATION_SLOT ... EXPORT_SNAPSHOT` yields `consistent_point` + `snapshot_name` born at the same instant; a second regular connection runs `SET TRANSACTION SNAPSHOT` and COPYs each table (streamed in bounded chunks into `PGlite::copy_in` — never a whole table in memory); streaming then starts at `consistent_point`. Gap-free by construction — no reconciliation logic exists because no gap can exist.
 
-### Decision 5: Plain INSERT/UPDATE/DELETE apply, typed binds with casts
+### Decision 5: Plain INSERT/UPDATE/DELETE apply, untyped literals (revised at implementation)
 
 **Context:** Apply SQL could be defensive (upserts) or mirror events 1:1; values arrive as pgoutput text cells.
-**Decision:** Plain statements mirroring upstream events (skip-by-watermark already guarantees exactly-once, so upsert defensiveness would only mask bugs). Values pass as typed binds with explicit casts derived from the Relation message's type_oid (static OID→typename map for common types); unknown OIDs halt loudly rather than guess. `UnchangedToast` cells are omitted from the SET list; UPDATE/DELETE target the primary key from the key tuple.
+**Decision:** Plain statements mirroring upstream events (skip-by-watermark already guarantees exactly-once, so upsert defensiveness would only mask bugs). Values are embedded as quote-doubled text literals; untyped string literals in assignment context coerce to the column type through the same input functions binds would use, so fidelity is identical, while costing one engine roundtrip per statement instead of two (describe + bind) and requiring no OID→typename map. The original blueprint proposed typed binds with casts; revised during implementation for the roundtrip and simplicity win — `ident()`/`lit()` quoting is covered by unit tests. `UnchangedToast` cells are omitted from the SET list; UPDATE/DELETE target the replica-identity key ('K' tuple or flagged columns of the new tuple), with REPLICA IDENTITY FULL old tuples matched via column-wise `IS NOT DISTINCT FROM`.
 
 ### Decision 6: Halt-loudly drift policy
 
