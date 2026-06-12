@@ -16,4 +16,11 @@ dist/
 *.node
 *.tsbuildinfo
 packages/flown/native/
-.dev
+.dev/pglite/
+.dev/db/
+native/out/
+native/*.o
+native/libpglite.a
+native/pglite-share.tar
+native/smoke
+*.sha256
