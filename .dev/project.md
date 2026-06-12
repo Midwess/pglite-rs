@@ -112,7 +112,14 @@ Design record lives in `.dev/changes/implement-pglite-v1/{design.md,blueprint.md
 
 ## Latest Analysis
 
-Last updated: 2026-06-12 — change `replica-mode` (previous: multiple-process-mode, v1-2-engine-parity, implement-pglite-v1)
+Last updated: 2026-06-13 — change `socket-orm-connectivity` (previous: replica-mode, multiple-process-mode, v1-2-engine-parity, implement-pglite-v1)
+
+### socket-orm-connectivity Analysis Additions
+- ORM integration point = wire protocol over unix sockets (universal across SQLx/SeaORM/Diesel); MP publishes its postmaster socket via connection_uri(), in-process gains a `socket`-feature gateway (SocketGateway: doorman std thread, synthesized handshake, frame pump at Q/F/Sync + COPY-IN c/f continuation, per-batch tx_lock, verbatim responses + notify side-channel)
+- postgres-protocol encodes only frontend-direction messages — synthesized server responses (AuthenticationOk/ParameterStatus/BackendKeyData/ReadyForQuery) hand-assembled; server_version queried live at gateway start
+- process_response unusable in the pump (errors on ErrorResponse = normal ORM traffic) — separate notify-only dispatch_notifications helper
+- Drop-clean contract formalized: Drop alone reclaims (flag + self-connect wake + bounded join + dir removal); NotifyConn reader-thread leak identified and fixed via Shutdown::Both at Pool teardown
+- Socket dirs RAM-backed: /dev/shm when linux+writable else temp_dir; socket payload is kernel RAM on every Unix regardless (nameplate-only on disk)
 
 ### replica-mode Analysis Additions
 - Crate is tokio-free by design; replication client is hand-rolled: dedicated `pglite-replica` OS thread + std TcpStream + `postgres-protocol` (SCRAM present at `authentication::sasl`), mirroring the engine-thread precedent (mpsc in, oneshot boot result)
