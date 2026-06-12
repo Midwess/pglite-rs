@@ -60,8 +60,8 @@ impl Drop for CloseOnDrop {
     }
 }
 
-type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
-type ListenerMap = HashMap<String, Vec<(u64, NotificationCallback)>>;
+pub(crate) type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
+pub(crate) type ListenerMap = HashMap<String, Vec<(u64, NotificationCallback)>>;
 
 #[derive(Clone)]
 pub(crate) enum Backend {
@@ -299,8 +299,8 @@ impl PGlite {
             .entry(channel.to_lowercase())
             .or_default()
             .push((token, Box::new(callback)));
-        self.exec_unlocked(&format!("LISTEN \"{}\"", channel.replace('"', "\"\"")))
-            .await?;
+        let sql = format!("LISTEN \"{}\"", channel.replace('"', "\"\""));
+        self.notify_command(&sql).await?;
         Ok(token)
     }
 
@@ -322,7 +322,7 @@ impl PGlite {
             }
         };
         if empty {
-            self.exec_unlocked(&format!("UNLISTEN \"{}\"", channel.replace('"', "\"\"")))
+            self.notify_command(&format!("UNLISTEN \"{}\"", channel.replace('"', "\"\"")))
                 .await?;
         }
         Ok(())
@@ -409,7 +409,7 @@ impl PGlite {
 
     pub async fn unlisten(&self, channel: &str) -> Result<(), Error> {
         let _guard = self.tx_lock.lock().await;
-        self.exec_unlocked(&format!("UNLISTEN \"{}\"", channel.replace('"', "\"\"")))
+        self.notify_command(&format!("UNLISTEN \"{}\"", channel.replace('"', "\"\"")))
             .await?;
         self.listeners
             .lock()
@@ -421,6 +421,14 @@ impl PGlite {
     pub async fn close(self) -> Result<(), Error> {
         let _guard = self.tx_lock.lock().await;
         self.backend.close().await
+    }
+
+    pub(crate) async fn notify_command(&self, sql: &str) -> Result<(), Error> {
+        #[cfg(feature = "multiple-process")]
+        if let Backend::MultiProcess(pool) = &self.backend {
+            return pool.notify_conn(&self.listeners)?.command(sql).await;
+        }
+        self.exec_unlocked(sql).await
     }
 
     pub(crate) async fn exec_unlocked(&self, sql: &str) -> Result<(), Error> {

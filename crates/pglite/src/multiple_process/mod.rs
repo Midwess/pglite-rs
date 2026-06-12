@@ -1,3 +1,4 @@
+pub(crate) mod notify;
 pub(crate) mod pool;
 
 use std::os::unix::fs::PermissionsExt;

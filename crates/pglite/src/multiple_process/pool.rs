@@ -26,6 +26,8 @@ pub(crate) struct Pool {
     pub(crate) server: Arc<Server>,
     conns: Vec<mpsc::Sender<ConnCmd>>,
     state: Mutex<PoolState>,
+    credentials: (String, String),
+    notify: Mutex<Option<Arc<super::notify::NotifyConn>>>,
     _threads: Vec<JoinHandle<()>>,
 }
 
@@ -98,6 +100,8 @@ impl Pool {
                 idle: (0..size).collect(),
                 waiters: Vec::new(),
             }),
+            credentials: (username.to_string(), database.to_string()),
+            notify: Mutex::new(None),
             _threads: threads,
         })
     }
@@ -150,6 +154,24 @@ impl Pool {
             pool: self.clone(),
             idx,
         }
+    }
+
+    pub(crate) fn notify_conn(
+        &self,
+        listeners: &Arc<Mutex<crate::db::ListenerMap>>,
+    ) -> Result<Arc<super::notify::NotifyConn>, Error> {
+        let mut slot = self.notify.lock().unwrap();
+        if let Some(conn) = slot.as_ref() {
+            return Ok(conn.clone());
+        }
+        let conn = super::notify::NotifyConn::start(
+            &self.server.sock_path,
+            &self.credentials.0,
+            &self.credentials.1,
+            listeners.clone(),
+        )?;
+        *slot = Some(conn.clone());
+        Ok(conn)
     }
 
     pub(crate) fn fire_and_forget(&self, wire: Vec<u8>) {

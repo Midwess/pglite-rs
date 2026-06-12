@@ -262,3 +262,44 @@ fn parallel_pinned_transactions() {
         let _ = std::fs::remove_dir_all(&base);
     });
 }
+
+#[test]
+fn notify_across_connections() {
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mpnotify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(&base, MultiProcessOptions::default())
+            .await
+            .unwrap();
+
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = received.clone();
+        let token = db
+            .listen("updates", move |payload| {
+                sink.lock().unwrap().push(payload.to_string());
+            })
+            .await
+            .unwrap();
+
+        db.exec("NOTIFY updates, 'first'").await.unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while received.lock().unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(received.lock().unwrap().as_slice(), ["first"]);
+
+        db.unlisten_token("updates", token).await.unwrap();
+        db.exec("NOTIFY updates, 'second'").await.unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            received.lock().unwrap().as_slice(),
+            ["first"],
+            "unlistened channel must stop delivering"
+        );
+
+        db.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}
