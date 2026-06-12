@@ -303,3 +303,49 @@ fn notify_across_connections() {
         let _ = std::fs::remove_dir_all(&base);
     });
 }
+
+#[test]
+fn live_query_multi_process() {
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mplive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(&base, MultiProcessOptions::default())
+            .await
+            .unwrap();
+        db.exec("CREATE TABLE scores (id INT PRIMARY KEY, score INT)")
+            .await
+            .unwrap();
+        db.exec("INSERT INTO scores VALUES (1, 10)").await.unwrap();
+
+        let snapshots = std::sync::Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
+        let sink = snapshots.clone();
+        let live = db
+            .live_query("SELECT * FROM scores ORDER BY id", &[], move |rows| {
+                sink.lock().unwrap().push(rows.len());
+            })
+            .await
+            .unwrap();
+        assert_eq!(snapshots.lock().unwrap().as_slice(), [1]);
+
+        db.exec("INSERT INTO scores VALUES (2, 20)").await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while snapshots.lock().unwrap().len() < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(snapshots.lock().unwrap().last().copied(), Some(2));
+
+        live.unsubscribe().await.unwrap();
+        let rows = db
+            .query(
+                "SELECT count(*) FROM pg_class WHERE relname LIKE 'live\\_query\\_%\\_view'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows[0].get::<i64>(0).unwrap(), 0);
+
+        db.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}

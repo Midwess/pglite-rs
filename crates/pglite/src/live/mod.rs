@@ -39,7 +39,7 @@ impl PGlite {
         let view_name = format!("live_query_{id}_view");
 
         let tx = self.transaction().await?;
-        tx.exec(&format!("CREATE TEMP VIEW \"{view_name}\" AS {formatted}"))
+        tx.exec(&format!("CREATE VIEW \"{view_name}\" AS {formatted}"))
             .await?;
         let tables = tx
             .query(tables::WATCHED_TABLES_SQL, &[&view_name.as_str()])
@@ -125,6 +125,23 @@ impl PGlite {
             wake_tx,
             done,
         })
+    }
+}
+
+impl PGlite {
+    pub(crate) async fn sweep_live_views(&self) -> Result<(), Error> {
+        let rows = self
+            .query(
+                "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND n.nspname = 'public' AND c.relname LIKE 'live\\_query\\_%\\_view'",
+                &[],
+            )
+            .await?;
+        for row in &rows {
+            let name: &str = row.get(0)?;
+            self.exec(&format!("DROP VIEW IF EXISTS \"{name}\""))
+                .await?;
+        }
+        Ok(())
     }
 }
 

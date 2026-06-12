@@ -243,21 +243,25 @@ impl PGlite {
         }
         let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir.clone(), options);
         match boot_rx.await {
-            Ok(Ok(())) => Ok(PGlite {
-                backend: Backend::InProcess {
-                    _close: Arc::new(CloseOnDrop {
-                        cmd_tx: cmd_tx.clone(),
-                    }),
-                    cmd_tx,
-                    _handle: Arc::new(handle),
-                },
-                data_dir: Arc::new(data_dir),
-                tx_lock: Arc::new(Mutex::new(())),
-                listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
-                next_listener: Arc::new(AtomicU64::new(0)),
-                live_triggers: Arc::new(std::sync::Mutex::new(HashMap::new())),
-                _temp_dir: temp_dir,
-            }),
+            Ok(Ok(())) => {
+                let db = PGlite {
+                    backend: Backend::InProcess {
+                        _close: Arc::new(CloseOnDrop {
+                            cmd_tx: cmd_tx.clone(),
+                        }),
+                        cmd_tx,
+                        _handle: Arc::new(handle),
+                    },
+                    data_dir: Arc::new(data_dir),
+                    tx_lock: Arc::new(Mutex::new(())),
+                    listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                    next_listener: Arc::new(AtomicU64::new(0)),
+                    live_triggers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                    _temp_dir: temp_dir,
+                };
+                db.sweep_live_views().await?;
+                Ok(db)
+            }
             Ok(Err(e)) => {
                 OPEN.store(false, Ordering::SeqCst);
                 Err(e)

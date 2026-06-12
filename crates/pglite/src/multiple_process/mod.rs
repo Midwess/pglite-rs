@@ -185,9 +185,8 @@ impl PGlite {
         let pool_size = options.max_connections.max(2);
         let server = Server::spawn(&runtime_dir, &data_dir, &options, pool_size)?;
         let pool = Pool::start(server, pool_size, &options.username, &options.database)?;
-        Ok(PGlite::assemble(
-            Backend::MultiProcess(Arc::new(pool)),
-            data_dir,
-        ))
+        let db = PGlite::assemble(Backend::MultiProcess(Arc::new(pool)), data_dir);
+        db.sweep_live_views().await?;
+        Ok(db)
     }
 }
