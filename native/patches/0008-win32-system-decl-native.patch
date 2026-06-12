@@ -1,0 +1,13 @@
+--- a/src/port/system.c
++++ b/src/port/system.c
+@@ -49,6 +49,10 @@
+ #undef system
+ #undef popen
+ 
++#ifdef __PGLITE__
++extern int system(const char *command);
++#endif
++
+ int
+ pgwin32_system(const char *command)
+ {
