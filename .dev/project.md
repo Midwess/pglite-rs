@@ -131,6 +131,8 @@ C engine (`postgres-pglite` submodule) compiled as `libpglite.a` with ~25 libc-o
 - Transport seam = db.rs roundtrip(); Backend enum {InProcess, MultiProcess(Pool)}; tx_lock splits (MP plain queries lock-free; Transaction pins one pooled conn).
 - Session-state casualties under pool routing: live TEMP views (→ non-temp unified + startup sweep) and LISTEN (→ dedicated notify connection, try_clone halves, pending-oneshot acks).
 - --auth=trust sets local+host lines (initdb.c:3231); bare v3 StartupMessage accepted over unix socket (no SSLRequest needed); socket path = sockdir/.s.PGSQL.5432, sun_path ≤104 → short socket dirs mandatory; pg_ctl not shipped → connect-retry readiness.
+- Implementation findings: runtime-extraction stamp by tar byte-length failed (512-block padding absorbed patched-binary deltas → stale unpatched runtime → backend segfaults); now FNV-1a content fingerprint in the runtime dir name. Postmaster stderr logs to `<sockdir>.log`. Engine tag for patch-only changes bumps a `-pN` suffix (now `engine-06c837c6a303-p2`).
+- MP caveats: `dump_data_dir` under multi-process is crash-consistent only (CHECKPOINT then tar while other backends may still write) — quiesce writers for a clean dump. Orphan postmasters from SIGKILLed hosts are reaped by the next open of the same data dir (postmaster.pid stale-lock handling) but their sock dirs in temp linger until OS cleanup.
 
 ### v1.2 Analysis Additions
 - Extensions: PGXS `make install DESTDIR` against `native/out/install` → tar matching runtime layout; pgcrypto needs system OpenSSL (contrib/pgcrypto/Makefile:64); pgvector = uninitialized submodule `pglite/other_extensions/vector`
