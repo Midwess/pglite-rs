@@ -1,6 +1,6 @@
 --- a/pglite/src/pglitec/pglitec.c
 +++ b/pglite/src/pglitec/pglitec.c
-@@ -16,18 +16,53 @@
+@@ -16,17 +16,52 @@
  
  #include <unistd.h>
  #include <stdio.h>
@@ -20,7 +20,7 @@
  #include <fcntl.h>
  #include <string.h>
 +#include <stdlib.h>
- 
++
 +#ifdef _WIN32
 +#include <winsock2.h>
 +#include <ws2tcpip.h>
@@ -52,10 +52,9 @@
 +#define getpagesize() 4096
 +#define sigjmp_buf jmp_buf
 +#endif
-+
+ 
  #if defined(__EMSCRIPTEN__)
  #include <emscripten/emscripten.h>
- #else
 @@ -38,8 +73,10 @@
  volatile int is_pglite_active = 0;
  
@@ -85,7 +84,7 @@
  	return 0;
  }
  
-@@ -491,11 +530,13 @@
+@@ -491,12 +530,92 @@
  	return 0;
  }
  
@@ -96,6 +95,85 @@
  	short revents;    /* returned events */
  };
 +#endif
++
++#ifdef _WIN32
++/* ============ STATIC EXTENSION REGISTRY (Windows) =============
++*
++* PE DLLs cannot late-bind to symbols of an arbitrary host executable the
++* way ELF dlopen does, so extension modules linked statically into the
++* engine archive register their symbol tables here and the patched
++* win32 dlopen/dlsym resolve them without LoadLibrary.
++*/
++#define PGL_STATIC_EXT_MAX 8
  
++typedef struct PglStaticExt {
++    const char *name;
++    const char *const *symbol_names;
++    void *const *symbol_addrs;
++    int nsyms;
++} PglStaticExt;
++
++static PglStaticExt pgl_static_exts[PGL_STATIC_EXT_MAX];
++static int pgl_static_ext_count = 0;
++
++void
++pgl_register_static_ext(const char *name, const char *const *symbol_names,
++                        void *const *symbol_addrs, int nsyms) {
++    if (pgl_static_ext_count >= PGL_STATIC_EXT_MAX)
++        return;
++    pgl_static_exts[pgl_static_ext_count].name = name;
++    pgl_static_exts[pgl_static_ext_count].symbol_names = symbol_names;
++    pgl_static_exts[pgl_static_ext_count].symbol_addrs = symbol_addrs;
++    pgl_static_exts[pgl_static_ext_count].nsyms = nsyms;
++    pgl_static_ext_count++;
++}
++
++void *
++pgl_ext_dlopen(const char *file) {
++    const char *base = file;
++    const char *p;
++    int i;
++
++    for (p = file; *p; p++)
++        if (*p == '/' || *p == '\\')
++            base = p + 1;
++    for (i = 0; i < pgl_static_ext_count; i++) {
++        size_t n = strlen(pgl_static_exts[i].name);
++        if (strncmp(base, pgl_static_exts[i].name, n) == 0 &&
++            (base[n] == '\0' || base[n] == '.'))
++            return (void *) &pgl_static_exts[i];
++    }
++    return NULL;
++}
++
++static int
++pgl_ext_handle_index(void *handle) {
++    PglStaticExt *ext = (PglStaticExt *) handle;
++
++    if (ext >= pgl_static_exts && ext < pgl_static_exts + pgl_static_ext_count)
++        return (int) (ext - pgl_static_exts);
++    return -1;
++}
++
++void *
++pgl_ext_dlsym(void *handle, const char *symbol) {
++    int idx = pgl_ext_handle_index(handle);
++    int i;
++
++    if (idx < 0)
++        return NULL;
++    for (i = 0; i < pgl_static_exts[idx].nsyms; i++)
++        if (strcmp(pgl_static_exts[idx].symbol_names[i], symbol) == 0)
++            return pgl_static_exts[idx].symbol_addrs[i];
++    return NULL;
++}
++
++int
++pgl_ext_dlclose(void *handle) {
++    return pgl_ext_handle_index(handle) >= 0;
++}
++#endif
++
  int EMSCRIPTEN_KEEPALIVE pgl_poll(struct pollfd fds[], ssize_t nfds, int timeout) {
  	if (!is_pglite_active) {
+ 		extern int pgl_native_poll(void *fds, unsigned long nfds, int timeout);

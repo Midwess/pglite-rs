@@ -42,6 +42,7 @@ fi
 "$CC" -O2 -fPIC $PGLITEC_COMPAT -Dexit=pgl_native_exit -c "$SRC/pglite/src/pglitec/pglitec.c" -o "$OUT/pglitec.o"
 "$CC" -O2 -fPIC -I"$ROOT/native" -c "$ROOT/native/pglite_native.c" -o "$OUT/pglite_native.o"
 "$CC" -O2 -fPIC -I"$ROOT/native" -c "$ROOT/native/pglite_reset.c" -o "$OUT/pglite_reset.o"
+"$CC" -O2 -fPIC -I"$ROOT/native" -c "$ROOT/native/pglite_static_ext.c" -o "$OUT/pglite_static_ext.o"
 
 if [ ! -f "$BUILD/config.status" ]; then
   (cd "$BUILD" && "$SRC/configure" \
@@ -88,7 +89,8 @@ BACKEND_OBJS="$(cd "$BUILD" && cat $(find src/backend src/timezone -name objfile
 if [ "$(uname)" = "Darwin" ]; then
   (cd "$BUILD" && libtool -static -o "$OUT/libpglite.a" $BACKEND_OBJS \
     src/common/libpgcommon_srv.a src/port/libpgport_srv.a \
-    "$OUT/pglitec.o" "$OUT/pglite_native.o" "$OUT/pglite_reset.o" $ICU_ARCHIVES)
+    "$OUT/pglitec.o" "$OUT/pglite_native.o" "$OUT/pglite_reset.o" \
+    "$OUT/pglite_static_ext.o" $ICU_ARCHIVES)
 else
   (cd "$BUILD" && {
     echo "create libpglite.a"
@@ -97,6 +99,10 @@ else
     echo "addlib src/port/libpgport_srv.a"
     case "$(uname)" in MINGW*|MSYS*) echo "delete getopt_srv.o getopt_long_srv.o" ;; esac
     echo "addmod ../pglitec.o"; echo "addmod ../pglite_native.o"; echo "addmod ../pglite_reset.o"
+    echo "addmod ../pglite_static_ext.o"
+    case "$(uname)" in MINGW*|MSYS*)
+      for o in src/pl/plpgsql/src/*.o; do echo "addmod $o"; done ;;
+    esac
     for a in $ICU_ARCHIVES; do echo "addlib $a"; done
     echo "save"
     echo "end"

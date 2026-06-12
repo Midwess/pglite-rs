@@ -1,0 +1,69 @@
+--- a/src/port/win32dlopen.c
++++ b/src/port/win32dlopen.c
+@@ -15,6 +15,12 @@
+ 
+ #include "c.h"
+ 
++#ifdef __PGLITE__
++extern void *pgl_ext_dlopen(const char *file);
++extern void *pgl_ext_dlsym(void *handle, const char *symbol);
++extern int	pgl_ext_dlclose(void *handle);
++#endif
++
+ static char last_dyn_error[512];
+ 
+ static void
+@@ -48,6 +54,13 @@
+ int
+ dlclose(void *handle)
+ {
++#ifdef __PGLITE__
++	if (pgl_ext_dlclose(handle))
++	{
++		last_dyn_error[0] = 0;
++		return 0;
++	}
++#endif
+ 	if (!FreeLibrary((HMODULE) handle))
+ 	{
+ 		set_dl_error();
+@@ -62,6 +75,20 @@
+ {
+ 	void	   *ptr;
+ 
++#ifdef __PGLITE__
++	ptr = pgl_ext_dlsym(handle, symbol);
++	if (ptr)
++	{
++		last_dyn_error[0] = 0;
++		return ptr;
++	}
++	if (pgl_ext_dlclose(handle))
++	{
++		snprintf(last_dyn_error, sizeof(last_dyn_error) - 1,
++				 "symbol \"%s\" not found in static extension", symbol);
++		return NULL;
++	}
++#endif
+ 	ptr = GetProcAddress((HMODULE) handle, symbol);
+ 	if (!ptr)
+ 	{
+@@ -78,6 +105,18 @@
+ 	HMODULE		h;
+ 	int			prevmode;
+ 
++#ifdef __PGLITE__
++	{
++		void	   *sh = pgl_ext_dlopen(file);
++
++		if (sh)
++		{
++			last_dyn_error[0] = 0;
++			return sh;
++		}
++	}
++#endif
++
+ 	/* Disable popup error messages when loading DLLs */
+ 	prevmode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+ 	h = LoadLibrary(file);
