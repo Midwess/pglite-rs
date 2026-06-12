@@ -44,4 +44,29 @@ pgl_register_plpgsql(void)
 							plpgsql_symbol_addrs, 8);
 }
 
+/*
+ * plpgsql was compiled as a module, so PGDLLIMPORT backend globals became
+ * __imp_* import-table references. Synthesize the import pointers against
+ * the statically linked definitions.
+ */
+#define PGL_IMP_SHIM(sym) extern char sym[]; void *__imp_##sym = (void *) sym
+
+PGL_IMP_SHIM(check_function_bodies);
+PGL_IMP_SHIM(CurrentMemoryContext);
+PGL_IMP_SHIM(CurrentResourceOwner);
+PGL_IMP_SHIM(error_context_stack);
+PGL_IMP_SHIM(GUC_check_errdetail_string);
+PGL_IMP_SHIM(InterruptPending);
+PGL_IMP_SHIM(MyProc);
+PGL_IMP_SHIM(PG_exception_stack);
+PGL_IMP_SHIM(pg_signal_mask);
+PGL_IMP_SHIM(pg_signal_queue);
+PGL_IMP_SHIM(SPI_processed);
+PGL_IMP_SHIM(SPI_result);
+PGL_IMP_SHIM(SPI_tuptable);
+PGL_IMP_SHIM(TopMemoryContext);
+PGL_IMP_SHIM(TopTransactionContext);
+PGL_IMP_SHIM(TopTransactionResourceOwner);
+PGL_IMP_SHIM(work_mem);
+
 #endif
