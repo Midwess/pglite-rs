@@ -193,3 +193,72 @@ fn open_multi_process_basic() {
         let _ = std::fs::remove_dir_all(&base);
     });
 }
+
+#[test]
+fn parallel_pinned_transactions() {
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mptx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(&base, MultiProcessOptions::default())
+            .await
+            .unwrap();
+        db.exec("CREATE TABLE items (id INT PRIMARY KEY, label TEXT)")
+            .await
+            .unwrap();
+
+        let tx1 = db.transaction().await.unwrap();
+        tx1.exec("INSERT INTO items VALUES (1, 'first')")
+            .await
+            .unwrap();
+
+        let rows = db.query("SELECT count(*) FROM items", &[]).await.unwrap();
+        assert_eq!(
+            rows[0].get::<i64>(0).unwrap(),
+            0,
+            "uncommitted tx1 row must be invisible to pool connections"
+        );
+
+        let tx2 = db.transaction().await.unwrap();
+        tx2.exec("INSERT INTO items VALUES (2, 'second')")
+            .await
+            .unwrap();
+        tx2.commit().await.unwrap();
+
+        let rows = db.query("SELECT count(*) FROM items", &[]).await.unwrap();
+        assert_eq!(
+            rows[0].get::<i64>(0).unwrap(),
+            1,
+            "tx2 committed while tx1 still open"
+        );
+
+        let rows = db
+            .query(
+                "SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(rows[0].get::<i64>(0).unwrap() >= 2);
+
+        tx1.commit().await.unwrap();
+        let rows = db.query("SELECT count(*) FROM items", &[]).await.unwrap();
+        assert_eq!(rows[0].get::<i64>(0).unwrap(), 2);
+
+        let tx3 = db.transaction().await.unwrap();
+        tx3.exec("INSERT INTO items VALUES (3, 'third')")
+            .await
+            .unwrap();
+        drop(tx3);
+
+        let rows = db.query("SELECT count(*) FROM items", &[]).await.unwrap();
+        assert_eq!(
+            rows[0].get::<i64>(0).unwrap(),
+            2,
+            "dropped transaction must roll back on its pinned connection"
+        );
+
+        db.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}

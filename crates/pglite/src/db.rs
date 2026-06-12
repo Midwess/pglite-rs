@@ -119,7 +119,7 @@ impl Backend {
         }
     }
 
-    fn is_multi_process(&self) -> bool {
+    pub(crate) fn is_multi_process(&self) -> bool {
         match self {
             Backend::InProcess { .. } => false,
             #[cfg(feature = "multiple-process")]
@@ -159,6 +159,19 @@ impl PGlite {
         } else {
             Some(self.tx_lock.lock().await)
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Via<'v> {
+    Backend(std::marker::PhantomData<&'v ()>),
+    #[cfg(feature = "multiple-process")]
+    Pin(&'v crate::multiple_process::pool::PinnedConn),
+}
+
+impl Via<'_> {
+    pub(crate) fn backend() -> Via<'static> {
+        Via::Backend(std::marker::PhantomData)
     }
 }
 
@@ -411,15 +424,36 @@ impl PGlite {
     }
 
     pub(crate) async fn exec_unlocked(&self, sql: &str) -> Result<(), Error> {
+        self.exec_via(Via::backend(), sql).await
+    }
+
+    pub(crate) async fn exec_via(&self, via: Via<'_>, sql: &str) -> Result<(), Error> {
         let mut wire = BytesMut::new();
         frontend::query(sql, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
-        let response = self.roundtrip(wire.to_vec()).await?;
+        let response = self.route(via, wire.to_vec()).await?;
         self.process_response(&response)?;
         Ok(())
     }
 
+    pub(crate) async fn route(&self, via: Via<'_>, wire: Vec<u8>) -> Result<Vec<u8>, Error> {
+        match via {
+            Via::Backend(_) => self.backend.roundtrip(wire).await,
+            #[cfg(feature = "multiple-process")]
+            Via::Pin(pin) => pin.roundtrip(wire).await,
+        }
+    }
+
     pub(crate) async fn query_unlocked(
         &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, Error> {
+        self.query_via(Via::backend(), sql, params).await
+    }
+
+    pub(crate) async fn query_via(
+        &self,
+        via: Via<'_>,
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, Error> {
@@ -429,7 +463,7 @@ impl PGlite {
         frontend::describe(b'S', "", &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
         frontend::sync(&mut wire);
 
-        let response = self.roundtrip(wire.to_vec()).await?;
+        let response = self.route(via, wire.to_vec()).await?;
         self.process_response(&response)?;
         let (param_types, columns) = Self::parse_describe(&response)?;
         if param_types.len() != params.len() {
@@ -466,7 +500,7 @@ impl PGlite {
         frontend::execute("", 0, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
         frontend::sync(&mut wire);
 
-        let response = self.roundtrip(wire.to_vec()).await?;
+        let response = self.route(via, wire.to_vec()).await?;
         self.process_response(&response)?;
 
         let columns = Arc::new(columns);
@@ -595,10 +629,19 @@ impl PGlite {
     }
 
     pub(crate) fn rollback_fire_and_forget(&self) {
-        let mut wire = BytesMut::new();
-        if frontend::query("ROLLBACK", &mut wire).is_ok() {
-            self.backend.fire_and_forget(wire.to_vec());
+        if let Some(wire) = Self::rollback_wire() {
+            self.backend.fire_and_forget(wire);
         }
+    }
+
+    pub(crate) fn rollback_wire() -> Option<Vec<u8>> {
+        let mut wire = BytesMut::new();
+        frontend::query("ROLLBACK", &mut wire).ok()?;
+        Some(wire.to_vec())
+    }
+
+    pub(crate) fn backend(&self) -> &Backend {
+        &self.backend
     }
 
     async fn roundtrip(&self, wire: Vec<u8>) -> Result<Vec<u8>, Error> {
