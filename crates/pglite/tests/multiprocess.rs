@@ -349,3 +349,48 @@ fn live_query_multi_process() {
         let _ = std::fs::remove_dir_all(&base);
     });
 }
+
+#[test]
+fn advisory_locks_copy_and_clean_shutdown() {
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mplock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(&base, MultiProcessOptions::default())
+            .await
+            .unwrap();
+
+        let tx = db.transaction().await.unwrap();
+        tx.exec("SELECT pg_advisory_xact_lock(42)").await.unwrap();
+        let rows = db
+            .query("SELECT pg_try_advisory_xact_lock(42)", &[])
+            .await
+            .unwrap();
+        assert!(
+            !rows[0].get::<bool>(0).unwrap(),
+            "lock held by pinned tx must block other sessions"
+        );
+        tx.commit().await.unwrap();
+        let rows = db
+            .query("SELECT pg_try_advisory_xact_lock(42)", &[])
+            .await
+            .unwrap();
+        assert!(rows[0].get::<bool>(0).unwrap());
+
+        db.exec("CREATE TABLE pets (name TEXT, legs INT)")
+            .await
+            .unwrap();
+        db.copy_in("COPY pets FROM STDIN", b"rex\t4\ntweety\t2\n")
+            .await
+            .unwrap();
+        let out = db.copy_out("COPY pets TO STDOUT").await.unwrap();
+        assert_eq!(out, b"rex\t4\ntweety\t2\n");
+
+        db.close().await.unwrap();
+        assert!(
+            !base.join("postmaster.pid").exists(),
+            "postmaster must shut down cleanly and remove its pid file"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}
