@@ -100,6 +100,15 @@ Settled design decisions (2026-06-12 session):
 
 Design record lives in `.dev/changes/implement-pglite-v1/{design.md,blueprint.md}` (supersedes the earlier plan for a docs/superpowers spec).
 
+## Engine Pin Bump Runbook
+
+1. `git -C postgres-pglite fetch origin && git -C postgres-pglite log --oneline HEAD..origin/main` — review fork changes
+2. `git -C postgres-pglite checkout <new-sha>` ; rebuild + full test: `./native/build-libpglite.sh && ./native/build-extensions.sh pgcrypto pgvector && WITH_ICU=1 ./native/build-libpglite.sh && cargo test --workspace && cargo test -p pglite --features pgcrypto,pgvector,icu`
+3. Re-apply check: `native/patches/*.patch` must still apply (build script reports); refresh patches if drifted
+4. Update `ENGINE_TAG` const in BOTH `crates/pglite-sys/build.rs` and `crates/pglite/build.rs` to `engine-<new-12char-sha>`
+5. Commit submodule pin + consts; `git tag engine-<sha> && git push origin engine-<sha>` — CI rebuilds base + icu + all extension artifacts atomically on that tag
+6. Caveats: ICU and libc datadirs are mutually incompatible (locale_provider is per-datadir); extension artifacts are only valid against their tag's engine
+
 ## Latest Analysis
 
 Last updated: 2026-06-12 — change `v1-2-engine-parity` (previous: implement-pglite-v1)

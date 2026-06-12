@@ -20,7 +20,28 @@ tx.commit().await?;
 db.close().await?;
 ```
 
-Also included: `PGliteOptions` (custom user/database, relaxed durability, server params), `db.listen("channel", callback)` for LISTEN/NOTIFY, `db.copy_in`/`db.copy_out` for bulk data, and `db.dump_data_dir` / `PGlite::restore_data_dir` for tarball backups.
+Also included: `PGliteOptions` (custom user/database, relaxed durability, server params, locale provider), `db.listen` for LISTEN/NOTIFY, `db.live_query` for reactive queries that re-run on table changes, `db.copy_in`/`db.copy_out` for bulk data, and `db.dump_data_dir` / `PGlite::restore_data_dir` for tarball backups.
+
+## Features
+
+| Cargo feature | Adds |
+|---|---|
+| `pgvector` | the pgvector extension — `CREATE EXTENSION vector`, embedding columns, similarity search |
+| `pgcrypto` | the pgcrypto extension — digests, encryption (needs OpenSSL at artifact-build time only) |
+| `icu` | ICU engine variant — real Unicode collation via `locale_provider: Icu` (~+40MB, statically bundled) |
+
+Extension features require one linker flag in the consuming binary so the dlopen'd modules can resolve engine symbols — add to your crate's `build.rs`:
+
+```rust
+fn main() {
+    #[cfg(target_os = "macos")]
+    println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
+    #[cfg(not(target_os = "macos"))]
+    println!("cargo:rustc-link-arg=-Wl,--export-dynamic");
+}
+```
+
+ICU note: a data directory initialized with `locale_provider: Icu` can only be opened by `icu`-feature builds, and vice-versa for libc datadirs.
 
 Runtime-agnostic: futures work on tokio, smol, async-std, or plain `futures::executor::block_on`. The crate depends on `futures`, never on a specific runtime.
 
@@ -50,7 +71,7 @@ cargo test --workspace
 ## v1 limits
 
 - One open `PGlite` per process (`Error::AlreadyOpen`), and one engine boot per process lifetime — reopen after close requires a new process (`Error::ReopenUnsupported`). Reopening a data directory from a fresh process works fully.
-- C locale only (built without ICU); no extensions yet; macOS + Linux.
+- macOS + Linux. pg_dump and a psql-compatible socket bridge are planned (`pglite-socket`).
 
 ## License
 
