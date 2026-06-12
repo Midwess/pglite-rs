@@ -56,6 +56,7 @@ type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
 #[derive(Clone)]
 pub struct PGlite {
     cmd_tx: mpsc::Sender<EngineCommand>,
+    data_dir: Arc<std::path::PathBuf>,
     _handle: Arc<JoinHandle<()>>,
     tx_lock: Arc<Mutex<()>>,
     listeners: Arc<std::sync::Mutex<HashMap<String, NotificationCallback>>>,
@@ -129,13 +130,14 @@ impl PGlite {
             OPEN.store(false, Ordering::SeqCst);
             return Err(Error::ReopenUnsupported);
         }
-        let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir, options);
+        let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir.clone(), options);
         match boot_rx.await {
             Ok(Ok(())) => Ok(PGlite {
                 _close: Arc::new(CloseOnDrop {
                     cmd_tx: cmd_tx.clone(),
                 }),
                 cmd_tx,
+                data_dir: Arc::new(data_dir),
                 _handle: Arc::new(handle),
                 tx_lock: Arc::new(Mutex::new(())),
                 listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -224,6 +226,27 @@ impl PGlite {
             }
         }
         Ok(out)
+    }
+
+    pub async fn dump_data_dir(&self, dest: impl AsRef<Path>) -> Result<(), Error> {
+        let _guard = self.tx_lock.lock().await;
+        self.exec_unlocked("CHECKPOINT").await?;
+        let file = std::fs::File::create(dest.as_ref())?;
+        let mut builder = tar::Builder::new(file);
+        builder.append_dir_all(".", self.data_dir.as_ref())?;
+        builder.finish()?;
+        Ok(())
+    }
+
+    pub fn restore_data_dir(
+        tar_path: impl AsRef<Path>,
+        data_dir: impl AsRef<Path>,
+    ) -> Result<(), Error> {
+        let file = std::fs::File::open(tar_path.as_ref())?;
+        std::fs::create_dir_all(data_dir.as_ref())?;
+        let mut archive = tar::Archive::new(file);
+        archive.unpack(data_dir.as_ref())?;
+        Ok(())
     }
 
     fn has_message<F>(response: &[u8], pred: F) -> Result<bool, Error>

@@ -20,6 +20,8 @@ tx.commit().await?;
 db.close().await?;
 ```
 
+Also included: `PGliteOptions` (custom user/database, relaxed durability, server params), `db.listen("channel", callback)` for LISTEN/NOTIFY, `db.copy_in`/`db.copy_out` for bulk data, and `db.dump_data_dir` / `PGlite::restore_data_dir` for tarball backups.
+
 Runtime-agnostic: futures work on tokio, smol, async-std, or plain `futures::executor::block_on`. The crate depends on `futures`, never on a specific runtime.
 
 ## How it works
