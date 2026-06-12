@@ -2,7 +2,7 @@ diff --git a/src/backend/access/transam/xlog.c b/src/backend/access/transam/xlog
 index 1bb1e43042..8a62e4f67d 100644
 --- a/src/backend/access/transam/xlog.c
 +++ b/src/backend/access/transam/xlog.c
-@@ -634,6 +634,14 @@ static XLogwrtResult LogwrtResult = {0, 0};
+@@ -634,6 +634,16 @@ static XLogwrtResult LogwrtResult = {0, 0};
   * Note: call Reserve/ReleaseExternalFD to track consumption of this FD.
   */
  static int	openLogFile = -1;
@@ -11,6 +11,8 @@ index 1bb1e43042..8a62e4f67d 100644
 +void
 +pgl_xlog_fd_reset(void)
 +{
++	if (openLogFile >= 0)
++		close(openLogFile);
 +	openLogFile = -1;
 +}
 +#endif
@@ -21,14 +23,17 @@ diff --git a/src/backend/storage/file/fd.c b/src/backend/storage/file/fd.c
 index 601b048a3f..74236bbbd5 100644
 --- a/src/backend/storage/file/fd.c
 +++ b/src/backend/storage/file/fd.c
-@@ -273,6 +273,22 @@ static AllocateDesc *allocatedDescs = NULL;
+@@ -273,6 +273,25 @@ static AllocateDesc *allocatedDescs = NULL;
   */
  static int	numExternalFDs = 0;
- 
+
 +#ifdef __PGLITE__
++static void closeAllVfds(void);
++
 +void
 +pgl_fd_reset(void)
 +{
++	closeAllVfds();
 +	VfdCache = NULL;
 +	SizeVfdCache = 0;
 +	nfile = 0;
