@@ -180,7 +180,6 @@ impl Engine {
 
         let args: Vec<CString> = [
             "--single",
-            "-F",
             "-O",
             "-j",
             "-c",
