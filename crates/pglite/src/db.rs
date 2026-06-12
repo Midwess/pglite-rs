@@ -70,6 +70,8 @@ pub(crate) enum Backend {
         _handle: Arc<JoinHandle<()>>,
         _close: Arc<CloseOnDrop>,
     },
+    #[cfg(feature = "multiple-process")]
+    MultiProcess(Arc<crate::multiple_process::pool::Pool>),
 }
 
 impl Backend {
@@ -82,6 +84,8 @@ impl Backend {
                     .map_err(|_| Error::Closed)?;
                 rx.await.map_err(|_| Error::Closed)?
             }
+            #[cfg(feature = "multiple-process")]
+            Backend::MultiProcess(pool) => pool.roundtrip(wire).await,
         }
     }
 
@@ -91,6 +95,8 @@ impl Backend {
                 let (reply, _rx) = oneshot::channel();
                 let _ = cmd_tx.send(EngineCommand::Exec { wire, reply });
             }
+            #[cfg(feature = "multiple-process")]
+            Backend::MultiProcess(pool) => pool.fire_and_forget(wire),
         }
     }
 
@@ -105,6 +111,19 @@ impl Backend {
                 OPEN.store(false, Ordering::SeqCst);
                 Ok(())
             }
+            #[cfg(feature = "multiple-process")]
+            Backend::MultiProcess(pool) => {
+                pool.server.shutdown();
+                Ok(())
+            }
+        }
+    }
+
+    fn is_multi_process(&self) -> bool {
+        match self {
+            Backend::InProcess { .. } => false,
+            #[cfg(feature = "multiple-process")]
+            Backend::MultiProcess(_) => true,
         }
     }
 }
@@ -118,6 +137,29 @@ pub struct PGlite {
     next_listener: Arc<AtomicU64>,
     live_triggers: Arc<std::sync::Mutex<HashMap<(u32, u32), usize>>>,
     _temp_dir: Option<Arc<TempDataDir>>,
+}
+
+impl PGlite {
+    #[cfg(feature = "multiple-process")]
+    pub(crate) fn assemble(backend: Backend, data_dir: std::path::PathBuf) -> PGlite {
+        PGlite {
+            backend,
+            data_dir: Arc::new(data_dir),
+            tx_lock: Arc::new(Mutex::new(())),
+            listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            next_listener: Arc::new(AtomicU64::new(0)),
+            live_triggers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            _temp_dir: None,
+        }
+    }
+
+    pub(crate) async fn serial_guard(&self) -> Option<futures::lock::MutexGuard<'_, ()>> {
+        if self.backend.is_multi_process() {
+            None
+        } else {
+            Some(self.tx_lock.lock().await)
+        }
+    }
 }
 
 struct TempDataDir(std::path::PathBuf);
@@ -215,7 +257,7 @@ impl PGlite {
     }
 
     pub async fn exec(&self, sql: &str) -> Result<(), Error> {
-        let _guard = self.tx_lock.lock().await;
+        let _guard = self.serial_guard().await;
         self.exec_unlocked(sql).await
     }
 
@@ -224,7 +266,7 @@ impl PGlite {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, Error> {
-        let _guard = self.tx_lock.lock().await;
+        let _guard = self.serial_guard().await;
         self.query_unlocked(sql, params).await
     }
 
@@ -274,7 +316,7 @@ impl PGlite {
     }
 
     pub async fn copy_in(&self, sql: &str, data: &[u8]) -> Result<(), Error> {
-        let _guard = self.tx_lock.lock().await;
+        let _guard = self.serial_guard().await;
         let mut wire = BytesMut::new();
         frontend::query(sql, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
         let mut wire = wire.to_vec();
@@ -293,7 +335,7 @@ impl PGlite {
     }
 
     pub async fn copy_out(&self, sql: &str) -> Result<Vec<u8>, Error> {
-        let _guard = self.tx_lock.lock().await;
+        let _guard = self.serial_guard().await;
         let mut wire = BytesMut::new();
         frontend::query(sql, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
         let response = self.roundtrip(wire.to_vec()).await?;

@@ -24,6 +24,8 @@ pub enum Error {
     Protocol(String),
     #[error("boot failed: {0}")]
     Boot(String),
+    #[error("postmaster failed to start: {0}")]
+    PostmasterStart(String),
 }
 
 impl Error {

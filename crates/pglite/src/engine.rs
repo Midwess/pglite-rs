@@ -101,16 +101,27 @@ impl Engine {
         (cmd_tx, handle, boot_rx)
     }
 
-    fn runtime_dir() -> PathBuf {
+    pub(crate) fn runtime_dir() -> PathBuf {
         std::env::var("PGLITE_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 std::env::temp_dir().join(format!(
-                    "pglite-rs-runtime-{}-{}",
+                    "pglite-rs-runtime-{}-{:x}",
                     env!("CARGO_PKG_VERSION"),
-                    crate::RUNTIME_TAR.len()
+                    Self::runtime_fingerprint()
                 ))
             })
+    }
+
+    fn runtime_fingerprint() -> u64 {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for chunk in crate::RUNTIME_TAR.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            hash ^= u64::from_le_bytes(word);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
     }
 
     fn run(&mut self, cmd_rx: mpsc::Receiver<EngineCommand>) {
@@ -270,10 +281,14 @@ impl Engine {
     }
 
     fn startup_packet(&self) -> Vec<u8> {
+        Self::build_startup_packet(&self.options.username, &self.options.database)
+    }
+
+    pub(crate) fn build_startup_packet(username: &str, database: &str) -> Vec<u8> {
         let mut params = Vec::new();
         for (k, v) in [
-            ("user", self.options.username.as_str()),
-            ("database", self.options.database.as_str()),
+            ("user", username),
+            ("database", database),
             ("client_encoding", "UTF8"),
         ] {
             params.extend_from_slice(k.as_bytes());
@@ -291,12 +306,16 @@ impl Engine {
     }
 
     fn extract_runtime(&self) -> Result<(), Error> {
-        if self.runtime_dir.join(".extracted").exists() {
+        Self::extract_runtime_to(&self.runtime_dir)
+    }
+
+    pub(crate) fn extract_runtime_to(runtime_dir: &PathBuf) -> Result<(), Error> {
+        if runtime_dir.join(".extracted").exists() {
             return Ok(());
         }
-        let staging = self.runtime_dir.with_file_name(format!(
+        let staging = runtime_dir.with_file_name(format!(
             "{}.staging-{}",
-            self.runtime_dir.file_name().unwrap().to_string_lossy(),
+            runtime_dir.file_name().unwrap().to_string_lossy(),
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&staging);
@@ -304,9 +323,9 @@ impl Engine {
         let mut archive = tar::Archive::new(crate::RUNTIME_TAR);
         archive.unpack(&staging)?;
         std::fs::write(staging.join(".extracted"), b"")?;
-        if std::fs::rename(&staging, &self.runtime_dir).is_err() {
+        if std::fs::rename(&staging, runtime_dir).is_err() {
             let _ = std::fs::remove_dir_all(&staging);
-            if !self.runtime_dir.join(".extracted").exists() {
+            if !runtime_dir.join(".extracted").exists() {
                 return Err(Error::Boot(
                     "runtime extraction race lost and target invalid".into(),
                 ));
@@ -316,18 +335,32 @@ impl Engine {
     }
 
     fn run_initdb(&self) -> Result<(), Error> {
-        if self.data_dir.join("PG_VERSION").exists() {
+        Self::run_initdb_at(
+            &self.runtime_dir,
+            &self.data_dir,
+            &self.options.username,
+            self.options.locale_provider,
+        )
+    }
+
+    pub(crate) fn run_initdb_at(
+        runtime_dir: &PathBuf,
+        data_dir: &PathBuf,
+        username: &str,
+        locale_provider: LocaleProvider,
+    ) -> Result<(), Error> {
+        if data_dir.join("PG_VERSION").exists() {
             return Ok(());
         }
-        let locale_args: &[&str] = match self.options.locale_provider {
+        let locale_args: &[&str] = match locale_provider {
             LocaleProvider::Libc => &["--locale=C", "--locale-provider=libc"],
             LocaleProvider::Icu => &["--locale=C", "--locale-provider=icu", "--icu-locale=en"],
         };
-        let output = Command::new(self.runtime_dir.join("bin/initdb"))
+        let output = Command::new(runtime_dir.join("bin/initdb"))
             .args(["--allow-group-access", "--encoding", "UTF8"])
             .args(locale_args)
-            .args(["--auth=trust", "-U", &self.options.username, "-D"])
-            .arg(&self.data_dir)
+            .args(["--auth=trust", "-U", username, "-D"])
+            .arg(data_dir)
             .env("TZ", "UTC")
             .output()?;
         if !output.status.success() {

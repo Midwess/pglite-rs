@@ -153,3 +153,43 @@ fn spawn_smoke() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+use futures::executor::block_on;
+use pglite::{MultiProcessOptions, PGlite};
+
+#[test]
+fn open_multi_process_basic() {
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(base.join("a"), MultiProcessOptions::default())
+            .await
+            .unwrap();
+
+        db.exec("CREATE TABLE t (id serial PRIMARY KEY, v text)")
+            .await
+            .unwrap();
+        db.exec("INSERT INTO t (v) VALUES ('one'), ('two')")
+            .await
+            .unwrap();
+        let rows = db
+            .query("SELECT v FROM t WHERE id = $1", &[&2i32])
+            .await
+            .unwrap();
+        assert_eq!(rows[0].get::<&str>(0).unwrap(), "two");
+
+        let db2 = PGlite::open_multi_process(base.join("b"), MultiProcessOptions::default())
+            .await
+            .unwrap();
+        let rows = db2.query("SELECT 41 + 1", &[]).await.unwrap();
+        assert_eq!(rows[0].get::<i32>(0).unwrap(), 42);
+        db2.close().await.unwrap();
+
+        let rows = db.query("SELECT count(*) FROM t", &[]).await.unwrap();
+        assert_eq!(rows[0].get::<i64>(0).unwrap(), 2);
+        db.close().await.unwrap();
+
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}
