@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -309,7 +309,7 @@ impl Engine {
         Self::extract_runtime_to(&self.runtime_dir)
     }
 
-    pub(crate) fn extract_runtime_to(runtime_dir: &PathBuf) -> Result<(), Error> {
+    pub(crate) fn extract_runtime_to(runtime_dir: &Path) -> Result<(), Error> {
         if runtime_dir.join(".extracted").exists() {
             return Ok(());
         }
@@ -344,8 +344,8 @@ impl Engine {
     }
 
     pub(crate) fn run_initdb_at(
-        runtime_dir: &PathBuf,
-        data_dir: &PathBuf,
+        runtime_dir: &Path,
+        data_dir: &Path,
         username: &str,
         locale_provider: LocaleProvider,
     ) -> Result<(), Error> {

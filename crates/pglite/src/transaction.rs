@@ -50,6 +50,7 @@ impl<'a> Transaction<'a> {
         Via::backend()
     }
 
+    #[cfg(feature = "multiple-process")]
     async fn exec_inner(&mut self, sql: &str) -> Result<(), Error> {
         self.db.exec_via(self.via(), sql).await
     }

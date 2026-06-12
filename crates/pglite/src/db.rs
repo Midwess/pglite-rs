@@ -48,7 +48,7 @@ impl Default for PGliteOptions {
 }
 static BOOTED: AtomicBool = AtomicBool::new(false);
 
-struct CloseOnDrop {
+pub(crate) struct CloseOnDrop {
     cmd_tx: mpsc::Sender<EngineCommand>,
 }
 
@@ -652,6 +652,7 @@ impl PGlite {
         Some(wire.to_vec())
     }
 
+    #[cfg(feature = "multiple-process")]
     pub(crate) fn backend(&self) -> &Backend {
         &self.backend
     }
