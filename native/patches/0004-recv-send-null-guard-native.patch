@@ -1,8 +1,57 @@
 diff --git a/pglite/src/pglitec/pglitec.c b/pglite/src/pglitec/pglitec.c
-index 1614ac9164..b9a38fb9fe 100644
+index 1614ac9164..58432b20d9 100644
 --- a/pglite/src/pglitec/pglitec.c
 +++ b/pglite/src/pglitec/pglitec.c
-@@ -451,6 +451,8 @@ int EMSCRIPTEN_KEEPALIVE pgl_getsockname(int __fd, struct sockaddr * __addr,
+@@ -24,6 +24,8 @@
+ #include <sys/socket.h>
+ #include <sys/time.h>
+ #include <setjmp.h>
++#include <stdarg.h>
++#include <fcntl.h>
+ #include <string.h>
+ 
+ #if defined(__EMSCRIPTEN__)
+@@ -423,12 +425,22 @@ pgl_set_rw_cbs(pgl_read_t read_cb, pgl_write_t write_cb) {
+ }
+ 
+ int EMSCRIPTEN_KEEPALIVE pgl_fcntl(int __fd, int __cmd, ...) {
++	if (!is_pglite_active) {
++		va_list ap;
++		void *arg;
++		va_start(ap, __cmd);
++		arg = va_arg(ap, void *);
++		va_end(ap);
++		return fcntl(__fd, __cmd, arg);
++	}
+ 	// dummy 
+ 	return 0;
+ }
+ 
+ int EMSCRIPTEN_KEEPALIVE pgl_setsockopt(int __fd, int __level, int __optname,
+ 	const void *__optval, socklen_t __optlen) {
++	if (!is_pglite_active)
++		return setsockopt(__fd, __level, __optname, __optval, __optlen);
+ 	// dummy 
+ 	return 0;
+ }
+@@ -436,12 +448,16 @@ int EMSCRIPTEN_KEEPALIVE pgl_setsockopt(int __fd, int __level, int __optname,
+ int EMSCRIPTEN_KEEPALIVE pgl_getsockopt(int __fd, int __level, int __optname,
+ 	void *__restrict __optval,
+ 	socklen_t *__restrict __optlen) {
++	if (!is_pglite_active)
++		return getsockopt(__fd, __level, __optname, __optval, __optlen);
+ 	// dummy 
+ 	return 0;
+ }
+ 
+ int EMSCRIPTEN_KEEPALIVE pgl_getsockname(int __fd, struct sockaddr * __addr,
+ 	socklen_t *__restrict __len) {
++	if (!is_pglite_active)
++		return getsockname(__fd, __addr, __len);
+ 	// dummy 
+ 	return 0;
+ }
+@@ -451,6 +467,8 @@ int EMSCRIPTEN_KEEPALIVE pgl_getsockname(int __fd, struct sockaddr * __addr,
  */
  
  ssize_t EMSCRIPTEN_KEEPALIVE pgl_recv(int __fd, void *__buf, size_t __n, int __flags) {
@@ -11,7 +60,7 @@ index 1614ac9164..b9a38fb9fe 100644
  	ssize_t got = pgl_read(__buf, __n);
  	return got;
  }
-@@ -460,7 +462,9 @@ ssize_t EMSCRIPTEN_KEEPALIVE pgl_recv(int __fd, void *__buf, size_t __n, int __f
+@@ -460,11 +478,15 @@ ssize_t EMSCRIPTEN_KEEPALIVE pgl_recv(int __fd, void *__buf, size_t __n, int __f
  */
  
  ssize_t EMSCRIPTEN_KEEPALIVE pgl_send(int __fd, const void *__buf, size_t __n, int __flags) {
@@ -22,3 +71,21 @@ index 1614ac9164..b9a38fb9fe 100644
  	return wrote;
  }
  
+ int EMSCRIPTEN_KEEPALIVE pgl_connect(int socket, const struct sockaddr *address, socklen_t address_len) {
++	if (!is_pglite_active)
++		return connect(socket, address, address_len);
+ 	// dummy
+ 	return 0;
+ }
+@@ -476,6 +498,10 @@ struct pollfd {
+ };
+ 
+ int EMSCRIPTEN_KEEPALIVE pgl_poll(struct pollfd fds[], ssize_t nfds, int timeout) {
++	if (!is_pglite_active) {
++		extern int pgl_native_poll(void *fds, unsigned long nfds, int timeout);
++		return pgl_native_poll((void *) fds, (unsigned long) nfds, timeout);
++	}
+     // dummy
+ 	return nfds;
+ }
+\ No newline at end of file

@@ -1,7 +1,14 @@
 #include "pglite_native.h"
 
+#include <poll.h>
 #include <setjmp.h>
 #include <stdlib.h>
+
+int
+pgl_native_poll(void *fds, unsigned long nfds, int timeout)
+{
+	return poll((struct pollfd *) fds, (nfds_t) nfds, timeout);
+}
 
 int
 pgl_native_setitimer(int which, const void *new_value, void *old_value)
