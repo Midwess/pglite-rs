@@ -292,6 +292,45 @@ struct TxnBuf {
     changes: Vec<RowChange>,
 }
 
+const BACKOFF_INITIAL: Duration = Duration::from_millis(25);
+const BACKOFF_MAX: Duration = Duration::from_secs(10);
+
+struct Backoff {
+    delay: Duration,
+}
+
+impl Backoff {
+    fn new() -> Backoff {
+        Backoff {
+            delay: BACKOFF_INITIAL,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.delay = BACKOFF_INITIAL;
+    }
+
+    fn next_delay(&mut self) -> Duration {
+        let current = self.delay;
+        self.delay = (self.delay * 2).min(BACKOFF_MAX);
+        current
+    }
+
+    fn sleep_done_aware(&mut self, done: &AtomicBool) {
+        let deadline = Instant::now() + self.next_delay();
+        loop {
+            if done.load(Ordering::SeqCst) {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(50)));
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Replica {
     db: PGlite,
@@ -301,6 +340,7 @@ pub struct Replica {
     halted: Arc<AtomicBool>,
     halt_reason: Arc<std::sync::Mutex<Option<String>>>,
     watermark: Arc<AtomicU64>,
+    ack_pos: Arc<AtomicU64>,
     subscribers: Arc<std::sync::Mutex<Vec<mpsc::Sender<Arc<CommittedTransaction>>>>>,
 }
 
@@ -329,6 +369,7 @@ impl Replica {
             halted: Arc::new(AtomicBool::new(false)),
             halt_reason: Arc::new(std::sync::Mutex::new(None)),
             watermark: Arc::new(AtomicU64::new(0)),
+            ack_pos: Arc::new(AtomicU64::new(0)),
             subscribers: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
@@ -374,19 +415,153 @@ impl Replica {
 
     fn thread_main(self, state: Option<ReplicaState>, boot_tx: oneshot::Sender<Result<(), Error>>) {
         match self.prepare(state) {
-            Ok((mut conn, start, fingerprint)) => {
+            Ok((conn, start, fingerprint)) => {
                 self.watermark.store(start.0, Ordering::SeqCst);
+                self.ack_pos.store(start.0, Ordering::SeqCst);
                 let _ = boot_tx.send(Ok(()));
-                if let Err(e) = self.stream_loop(&mut conn, start, &fingerprint) {
-                    self.halt(e);
-                }
-                conn.terminate();
+                self.run(conn, &fingerprint);
             }
             Err(e) => {
                 let _ = boot_tx.send(Err(e));
             }
         }
         self.stopped.store(true, Ordering::SeqCst);
+    }
+
+    fn run(&self, first_conn: ReplConn, fingerprint: &str) {
+        let mut conn = Some(first_conn);
+        let mut backoff = Backoff::new();
+        loop {
+            if self.done.load(Ordering::SeqCst) {
+                return;
+            }
+            let mut c = match conn.take() {
+                Some(c) => c,
+                None => match ReplConn::connect_and_auth(&self.config, true) {
+                    Ok(c) => c,
+                    Err(e) if Self::is_fatal(&e) => {
+                        self.halt(e);
+                        return;
+                    }
+                    Err(_) => {
+                        backoff.sleep_done_aware(&self.done);
+                        continue;
+                    }
+                },
+            };
+            match self.stream_loop(&mut c, &mut backoff, fingerprint) {
+                Ok(()) => {
+                    c.terminate();
+                    return;
+                }
+                Err(e) if Self::is_fatal(&e) => {
+                    c.terminate();
+                    self.halt(e);
+                    return;
+                }
+                Err(_) => {
+                    c.terminate();
+                    self.ack_pos
+                        .store(self.watermark.load(Ordering::SeqCst), Ordering::SeqCst);
+                    backoff.sleep_done_aware(&self.done);
+                }
+            }
+        }
+    }
+
+    fn is_fatal(e: &Error) -> bool {
+        match e {
+            Error::Io(_) | Error::Upstream(_) => false,
+            Error::Database { sqlstate, .. } => {
+                !matches!(sqlstate.as_str(), "55006" | "57P01" | "57P02" | "57P03")
+            }
+            _ => true,
+        }
+    }
+
+    fn map_invalidated(&self, e: Error) -> Error {
+        match e {
+            Error::Database { ref sqlstate, .. } if sqlstate == "55000" => {
+                Error::ReplicaHalted(format!(
+                    "replication slot '{}' was invalidated (upstream WAL retention exceeded); run Replica::decommission and start again for a full resync",
+                    self.config.slot_name
+                ))
+            }
+            other => other,
+        }
+    }
+
+    fn feedback_lsn(&self) -> Lsn {
+        Lsn(self
+            .watermark
+            .load(Ordering::SeqCst)
+            .max(self.ack_pos.load(Ordering::SeqCst)))
+    }
+
+    fn start_replication_with_retry(&self, conn: &mut ReplConn) -> Result<(), Error> {
+        let mut attempts = 0;
+        loop {
+            match conn.start_replication(
+                &self.config.slot_name,
+                self.watermark(),
+                &self.config.publication,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(Error::Database { ref sqlstate, .. })
+                    if sqlstate == "55006" && attempts < 5 =>
+                {
+                    attempts += 1;
+                    let deadline = Instant::now() + Duration::from_millis(200);
+                    while Instant::now() < deadline {
+                        if self.done.load(Ordering::SeqCst) {
+                            return Err(Error::Upstream(
+                                "stopped while waiting for the replication slot".into(),
+                            ));
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                }
+                Err(e) => return Err(self.map_invalidated(e)),
+            }
+        }
+    }
+
+    pub async fn decommission(db: &PGlite, config: &ReplicaConfig) -> Result<(), Error> {
+        let mut conn = ReplConn::connect_and_auth(config, false)?;
+        let slot = lit(&config.slot_name);
+        let result = (|| {
+            let rows = conn.simple_query(&format!(
+                "SELECT active_pid::text FROM pg_replication_slots WHERE slot_name = {slot}"
+            ))?;
+            if let Some(pid) = rows
+                .first()
+                .and_then(|r| r.first())
+                .and_then(|v| v.as_deref())
+                .and_then(|v| v.parse::<i64>().ok())
+            {
+                conn.simple_query(&format!("SELECT pg_terminate_backend({pid})"))?;
+            }
+            let mut attempts = 0;
+            loop {
+                match conn.simple_query(&format!("SELECT pg_drop_replication_slot({slot})")) {
+                    Ok(_) => return Ok(()),
+                    Err(Error::Database { ref sqlstate, .. }) if sqlstate == "42704" => {
+                        return Ok(())
+                    }
+                    Err(Error::Database { ref sqlstate, .. })
+                        if sqlstate == "55006" && attempts < 5 =>
+                    {
+                        attempts += 1;
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        })();
+        conn.terminate();
+        result?;
+        meta::ensure_meta_table(db).await?;
+        db.exec("DELETE FROM _pglite_replica").await
     }
 
     fn prepare(&self, state: Option<ReplicaState>) -> Result<(ReplConn, Lsn, String), Error> {
@@ -407,6 +582,7 @@ impl Replica {
     }
 
     fn first_run(&self, mut conn: ReplConn) -> Result<(ReplConn, Lsn, String), Error> {
+        conn.simple_query("SET lock_timeout = '29s'")?;
         let create = format!(
             "CREATE_REPLICATION_SLOT \"{}\" LOGICAL pgoutput EXPORT_SNAPSHOT",
             self.config.slot_name.replace('"', "\"\"")
@@ -456,10 +632,29 @@ impl Replica {
         Ok((conn, consistent_point, fingerprint))
     }
 
-    fn stream_loop(&self, conn: &mut ReplConn, start: Lsn, fingerprint: &str) -> Result<(), Error> {
-        conn.start_replication(&self.config.slot_name, start, &self.config.publication)?;
-        conn.set_stream_timeout(self.config.read_timeout)?;
-        conn.send_status(self.watermark(), false)?;
+    fn stream_loop(
+        &self,
+        conn: &mut ReplConn,
+        backoff: &mut Backoff,
+        fingerprint: &str,
+    ) -> Result<(), Error> {
+        let wal_sender_timeout = conn.wal_sender_timeout_ms()?;
+        self.start_replication_with_retry(conn)?;
+        backoff.reset();
+        let cadence = wal_sender_timeout
+            .map(|ms| {
+                self.config
+                    .status_interval
+                    .min(Duration::from_millis(ms * 3 / 4))
+            })
+            .unwrap_or(self.config.status_interval);
+        let read_timeout = self
+            .config
+            .read_timeout
+            .min(cadence / 2)
+            .max(Duration::from_millis(250));
+        conn.set_stream_timeout(read_timeout)?;
+        conn.send_status(self.feedback_lsn(), false)?;
         let mut last_status = Instant::now();
 
         let mut expected: HashMap<(String, String), String> = HashMap::new();
@@ -477,18 +672,27 @@ impl Replica {
             if self.done.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            if last_status.elapsed() >= self.config.status_interval {
-                conn.send_status(self.watermark(), false)?;
+            if last_status.elapsed() >= cadence {
+                conn.send_status(self.feedback_lsn(), false)?;
                 last_status = Instant::now();
             }
 
-            let Some(msg) = conn.read_copy_message()? else {
+            let Some(msg) = conn
+                .read_copy_message()
+                .map_err(|e| self.map_invalidated(e))?
+            else {
                 continue;
             };
             match msg {
-                ReplMsg::Keepalive { reply_requested } => {
+                ReplMsg::Keepalive {
+                    wal_end,
+                    reply_requested,
+                } => {
+                    if txn.is_none() {
+                        self.ack_pos.fetch_max(wal_end, Ordering::SeqCst);
+                    }
                     if reply_requested {
-                        conn.send_status(self.watermark(), false)?;
+                        conn.send_status(self.feedback_lsn(), false)?;
                         last_status = Instant::now();
                     }
                 }
@@ -591,8 +795,13 @@ impl Replica {
                         if end <= self.watermark() {
                             continue;
                         }
+                        if buf.stmts.is_empty() {
+                            self.ack_pos.fetch_max(end.0, Ordering::SeqCst);
+                            continue;
+                        }
                         self.apply(&buf.stmts, end)?;
                         self.watermark.store(end.0, Ordering::SeqCst);
+                        self.ack_pos.fetch_max(end.0, Ordering::SeqCst);
                         if !buf.changes.is_empty() {
                             self.broadcast(CommittedTransaction {
                                 xid: buf.xid,
@@ -840,6 +1049,55 @@ mod tests {
         assert!(rel()
             .insert_sql(&TupleData(vec![CellValue::Text("1".into())]))
             .is_err());
+    }
+
+    #[test]
+    fn backoff_doubles_to_cap_and_resets() {
+        let mut b = Backoff::new();
+        assert_eq!(b.next_delay(), Duration::from_millis(25));
+        assert_eq!(b.next_delay(), Duration::from_millis(50));
+        assert_eq!(b.next_delay(), Duration::from_millis(100));
+        for _ in 0..20 {
+            b.next_delay();
+        }
+        assert_eq!(b.next_delay(), BACKOFF_MAX);
+        b.reset();
+        assert_eq!(b.next_delay(), Duration::from_millis(25));
+    }
+
+    #[test]
+    fn backoff_sleep_interrupted_by_done() {
+        let mut b = Backoff::new();
+        for _ in 0..20 {
+            b.next_delay();
+        }
+        let done = AtomicBool::new(true);
+        let started = Instant::now();
+        b.sleep_done_aware(&done);
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn error_classification() {
+        assert!(!Replica::is_fatal(&Error::Upstream("eof".into())));
+        assert!(!Replica::is_fatal(&Error::Io(std::io::Error::other("net"))));
+        for transient in ["55006", "57P01", "57P02", "57P03"] {
+            assert!(!Replica::is_fatal(&Error::Database {
+                sqlstate: transient.into(),
+                message: String::new(),
+                detail: None,
+                hint: None,
+            }));
+        }
+        assert!(Replica::is_fatal(&Error::ReplicaHalted("drift".into())));
+        assert!(Replica::is_fatal(&Error::Protocol("bad".into())));
+        assert!(Replica::is_fatal(&Error::Closed));
+        assert!(Replica::is_fatal(&Error::Database {
+            sqlstate: "55000".into(),
+            message: String::new(),
+            detail: None,
+            hint: None,
+        }));
     }
 
     #[test]

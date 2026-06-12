@@ -112,7 +112,13 @@ Design record lives in `.dev/changes/implement-pglite-v1/{design.md,blueprint.md
 
 ## Latest Analysis
 
-Last updated: 2026-06-13 — change `socket-orm-connectivity` (previous: replica-mode, multiple-process-mode, v1-2-engine-parity, implement-pglite-v1)
+Last updated: 2026-06-13 — change `replica-hardening` (previous: socket-orm-connectivity, replica-mode, multiple-process-mode, v1-2-engine-parity, implement-pglite-v1)
+
+### replica-hardening Analysis Additions
+- Zero-cache reference study (replica-mode/zero-reference.md) drives the design: backoff 25ms→10s ×2 reset-on-success, slot-in-use 55006 retry, ack-keepalive-when-caught-up, 75%-of-wal_sender_timeout cadence (pg_settings EXTRACT EPOCH server-side), lock_timeout 29s on slot creation, 55000 invalidated-slot → forced resync
+- Ack position invariant: in-memory confirmed LSN may exceed durable watermark only across data-free spans — eliminates per-empty-txn engine writes safely (skipped WAL provably unneeded on replay)
+- Deliberate non-adoptions recorded: Zero's slot pool/advisory-lock/30s sweeper (multi-shard machinery → Replica::decommission instead) and testcontainers harness (→ CI image matrix [15,17] on existing replica job)
+- ReplMsg::Keepalive wal_end re-added (was dead code in replica-mode, now consumed by ack position)
 
 ### socket-orm-connectivity Analysis Additions
 - ORM integration point = wire protocol over unix sockets (universal across SQLx/SeaORM/Diesel); MP publishes its postmaster socket via connection_uri(), in-process gains a `socket`-feature gateway (SocketGateway: doorman std thread, synthesized handshake, frame pump at Q/F/Sync + COPY-IN c/f continuation, per-batch tx_lock, verbatim responses + notify side-channel)

@@ -81,7 +81,7 @@ impl Stream {
 #[derive(Debug)]
 pub(crate) enum ReplMsg {
     XLogData { data: Bytes },
-    Keepalive { reply_requested: bool },
+    Keepalive { wal_end: u64, reply_requested: bool },
     CopyDone,
 }
 
@@ -357,6 +357,17 @@ impl ReplConn {
         self.stream.set_read_timeout(Some(timeout))
     }
 
+    pub(crate) fn wal_sender_timeout_ms(&mut self) -> Result<Option<u64>, Error> {
+        let rows =
+            self.simple_query("SELECT setting FROM pg_settings WHERE name = 'wal_sender_timeout'")?;
+        Ok(rows
+            .first()
+            .and_then(|r| r.first())
+            .and_then(|v| v.as_deref())
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|ms| *ms > 0))
+    }
+
     pub(crate) fn read_copy_message(&mut self) -> Result<Option<ReplMsg>, Error> {
         loop {
             if let Some(msg) =
@@ -379,6 +390,7 @@ impl ReplConn {
                                     return Err(Error::Protocol("truncated keepalive".into()));
                                 }
                                 return Ok(Some(ReplMsg::Keepalive {
+                                    wal_end: u64::from_be_bytes(payload[1..9].try_into().unwrap()),
                                     reply_requested: payload[17] != 0,
                                 }));
                             }
