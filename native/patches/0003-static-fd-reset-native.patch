@@ -23,13 +23,11 @@ diff --git a/src/backend/storage/file/fd.c b/src/backend/storage/file/fd.c
 index 601b048a3f..74236bbbd5 100644
 --- a/src/backend/storage/file/fd.c
 +++ b/src/backend/storage/file/fd.c
-@@ -273,6 +273,25 @@ static AllocateDesc *allocatedDescs = NULL;
+@@ -273,6 +273,23 @@ static AllocateDesc *allocatedDescs = NULL;
   */
  static int	numExternalFDs = 0;
 
 +#ifdef __PGLITE__
-+static void closeAllVfds(void);
-+
 +void
 +pgl_fd_reset(void)
 +{
