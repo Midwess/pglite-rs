@@ -68,12 +68,13 @@ PGLITE_DEFS="-D__PGLITE__ -U_FORTIFY_SOURCE \
 
 NPROC="$( (command -v nproc >/dev/null 2>&1 && nproc) || sysctl -n hw.ncpu )"
 
+LINK_OBJS="$OUT/pglitec.o $OUT/pglite_native.o"
+
 SL_FLAGS=""
 if [ "$(uname)" = "Darwin" ]; then
   SL_FLAGS="-Wl,-undefined,dynamic_lookup"
 fi
-
-LINK_OBJS="$OUT/pglitec.o $OUT/pglite_native.o"
+case "$(uname)" in MINGW*|MSYS*) SL_FLAGS="$LINK_OBJS" ;; esac
 
 rm -f "$BUILD/src/backend/main/main.o" "$BUILD/src/backend/main/objfiles.txt" "$BUILD/src/bin/initdb/initdb.o" "$BUILD/src/backend/postgres"
 make -C "$BUILD" -j"$NPROC" COPT="$PGLITE_DEFS" LDFLAGS_EX="$LINK_OBJS" LDFLAGS_SL="$SL_FLAGS"
