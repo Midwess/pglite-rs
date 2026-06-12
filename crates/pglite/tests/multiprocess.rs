@@ -429,3 +429,39 @@ fn pool_survives_terminated_backend() {
         let _ = std::fs::remove_dir_all(&base);
     });
 }
+
+#[test]
+fn connection_uri_serves_external_clients() {
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mpuri-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(
+            &base,
+            MultiProcessOptions {
+                extra_connections: 1,
+                ..MultiProcessOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let uri = db.connection_uri().unwrap();
+        let host = uri.split("?host=").nth(1).unwrap();
+        let sock_path = db.socket_path().unwrap();
+        assert_eq!(sock_path, Path::new(host).join(".s.PGSQL.5432").as_path());
+
+        let mut stream = UnixStream::connect(sock_path).unwrap();
+        stream.write_all(&startup_packet()).unwrap();
+        read_until_ready(&mut stream);
+        let types = simple_query(&mut stream, "SELECT 1");
+        assert!(types.contains(&b'D'));
+        drop(stream);
+
+        let rows = db.query("SHOW max_connections", &[]).await.unwrap();
+        assert_eq!(rows[0].get::<&str>(0).unwrap(), "7");
+
+        db.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}
