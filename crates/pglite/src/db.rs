@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -50,11 +51,14 @@ impl Drop for CloseOnDrop {
     }
 }
 
+type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct PGlite {
     cmd_tx: mpsc::Sender<EngineCommand>,
     _handle: Arc<JoinHandle<()>>,
     tx_lock: Arc<Mutex<()>>,
+    listeners: Arc<std::sync::Mutex<HashMap<String, NotificationCallback>>>,
     _temp_dir: Option<Arc<TempDataDir>>,
     _close: Arc<CloseOnDrop>,
 }
@@ -134,6 +138,7 @@ impl PGlite {
                 cmd_tx,
                 _handle: Arc::new(handle),
                 tx_lock: Arc::new(Mutex::new(())),
+                listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 _temp_dir: temp_dir,
             }),
             Ok(Err(e)) => {
@@ -165,6 +170,30 @@ impl PGlite {
         crate::transaction::Transaction::begin(self).await
     }
 
+    pub async fn listen<F>(&self, channel: &str, callback: F) -> Result<(), Error>
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        let _guard = self.tx_lock.lock().await;
+        self.listeners
+            .lock()
+            .unwrap()
+            .insert(channel.to_lowercase(), Box::new(callback));
+        self.exec_unlocked(&format!("LISTEN \"{}\"", channel.replace('"', "\"\"")))
+            .await
+    }
+
+    pub async fn unlisten(&self, channel: &str) -> Result<(), Error> {
+        let _guard = self.tx_lock.lock().await;
+        self.exec_unlocked(&format!("UNLISTEN \"{}\"", channel.replace('"', "\"\"")))
+            .await?;
+        self.listeners
+            .lock()
+            .unwrap()
+            .remove(&channel.to_lowercase());
+        Ok(())
+    }
+
     pub async fn close(self) -> Result<(), Error> {
         let _guard = self.tx_lock.lock().await;
         let (reply, rx) = oneshot::channel();
@@ -180,7 +209,7 @@ impl PGlite {
         let mut wire = BytesMut::new();
         frontend::query(sql, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
         let response = self.roundtrip(wire.to_vec()).await?;
-        Self::check_errors(&response)?;
+        self.process_response(&response)?;
         Ok(())
     }
 
@@ -196,7 +225,7 @@ impl PGlite {
         frontend::sync(&mut wire);
 
         let response = self.roundtrip(wire.to_vec()).await?;
-        Self::check_errors(&response)?;
+        self.process_response(&response)?;
         let (param_types, columns) = Self::parse_describe(&response)?;
         if param_types.len() != params.len() {
             return Err(Error::Protocol(format!(
@@ -233,7 +262,7 @@ impl PGlite {
         frontend::sync(&mut wire);
 
         let response = self.roundtrip(wire.to_vec()).await?;
-        Self::check_errors(&response)?;
+        self.process_response(&response)?;
 
         let columns = Arc::new(columns);
         let mut rows = Vec::new();
@@ -271,13 +300,29 @@ impl PGlite {
         rx.await.map_err(|_| Error::Closed)?
     }
 
-    fn check_errors(response: &[u8]) -> Result<(), Error> {
+    fn process_response(&self, response: &[u8]) -> Result<(), Error> {
         let mut buf = BytesMut::from(response);
         while let Some(message) =
             Message::parse(&mut buf).map_err(|e| Error::Protocol(e.to_string()))?
         {
-            if let Message::ErrorResponse(body) = message {
-                return Err(Error::from_error_fields(body.fields()));
+            match message {
+                Message::ErrorResponse(body) => {
+                    return Err(Error::from_error_fields(body.fields()));
+                }
+                Message::NotificationResponse(body) => {
+                    let channel = body
+                        .channel()
+                        .map_err(|e| Error::Protocol(e.to_string()))?
+                        .to_lowercase();
+                    let payload = body
+                        .message()
+                        .map_err(|e| Error::Protocol(e.to_string()))?
+                        .to_string();
+                    if let Some(callback) = self.listeners.lock().unwrap().get(&channel) {
+                        callback(&payload);
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
