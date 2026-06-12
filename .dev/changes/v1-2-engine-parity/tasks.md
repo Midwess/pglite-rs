@@ -1,14 +1,14 @@
 # Tasks: v1-2-engine-parity
 
-## Progress: [0/16]
+## Progress: [3/16]
 
 **Process rule**: every task ends with `git commit` + `git push origin main`. Short messages, no co-author.
 
 ## 1. Native extension build proof (local, before any Rust)
 
-- [ ] 1.1 `native/build-extensions.sh`: init `vector` submodule; PGXS-build pgcrypto (system OpenSSL) → `pglite-ext-pgcrypto-<target>.tar.gz`; verify tar layout
-- [ ] 1.2 PGXS-build pgvector → `pglite-ext-pgvector-<target>.tar.gz`
-- [ ] 1.3 Merge ext tars onto a local runtime tar; prove `CREATE EXTENSION pgcrypto` + `digest()` and `CREATE EXTENSION vector` + `'[1,2,3]'::vector` via scratch run. GATE for Rust work
+- [x] 1.1 `native/build-extensions.sh`: init `vector` submodule; PGXS-build pgcrypto (system OpenSSL) → `pglite-ext-pgcrypto-<target>.tar.gz`; verify tar layout
+- [x] 1.2 PGXS-build pgvector → `pglite-ext-pgvector-<target>.tar.gz`
+- [x] 1.3 Merge ext tars onto a local runtime tar; prove `CREATE EXTENSION pgcrypto` + `digest()` and `CREATE EXTENSION vector` + `'[1,2,3]'::vector` via scratch run. GATE for Rust work
 
 ## 2. Feature scaffolding
 
@@ -44,6 +44,8 @@
 ---
 
 ## Notes
+
+- Phase 1 findings: (a) rustc dead-strips extension-facing engine API on macOS → fixed via `static:+whole-archive=pglite` in pglite-sys + `-Wl,-export_dynamic` link-arg at package level (user apps need the same one-liner — document in 7.2); (b) obsolete initdb_bundle.o removed from archive (subprocess initdb made it dead weight, broke whole-archive); (c) pgcrypto OpenSSL via LDFLAGS_SL (CLI SHLIB_LINK clobbers BE_DLLLIBS — don't).
 
 - pg_dump descoped: native pg_dump = separate process requiring a real socket; ships later with pglite-socket.
 - Highest-risk item: live-query refresh re-entrancy (blueprint Risks #1). Resolve in 4.2 before wiring callbacks.
