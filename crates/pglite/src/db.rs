@@ -64,16 +64,60 @@ type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
 type ListenerMap = HashMap<String, Vec<(u64, NotificationCallback)>>;
 
 #[derive(Clone)]
+pub(crate) enum Backend {
+    InProcess {
+        cmd_tx: mpsc::Sender<EngineCommand>,
+        _handle: Arc<JoinHandle<()>>,
+        _close: Arc<CloseOnDrop>,
+    },
+}
+
+impl Backend {
+    pub(crate) async fn roundtrip(&self, wire: Vec<u8>) -> Result<Vec<u8>, Error> {
+        match self {
+            Backend::InProcess { cmd_tx, .. } => {
+                let (reply, rx) = oneshot::channel();
+                cmd_tx
+                    .send(EngineCommand::Exec { wire, reply })
+                    .map_err(|_| Error::Closed)?;
+                rx.await.map_err(|_| Error::Closed)?
+            }
+        }
+    }
+
+    pub(crate) fn fire_and_forget(&self, wire: Vec<u8>) {
+        match self {
+            Backend::InProcess { cmd_tx, .. } => {
+                let (reply, _rx) = oneshot::channel();
+                let _ = cmd_tx.send(EngineCommand::Exec { wire, reply });
+            }
+        }
+    }
+
+    pub(crate) async fn close(&self) -> Result<(), Error> {
+        match self {
+            Backend::InProcess { cmd_tx, .. } => {
+                let (reply, rx) = oneshot::channel();
+                cmd_tx
+                    .send(EngineCommand::Close { reply })
+                    .map_err(|_| Error::Closed)?;
+                let _ = rx.await;
+                OPEN.store(false, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct PGlite {
-    cmd_tx: mpsc::Sender<EngineCommand>,
+    backend: Backend,
     data_dir: Arc<std::path::PathBuf>,
-    _handle: Arc<JoinHandle<()>>,
     tx_lock: Arc<Mutex<()>>,
     listeners: Arc<std::sync::Mutex<ListenerMap>>,
     next_listener: Arc<AtomicU64>,
     live_triggers: Arc<std::sync::Mutex<HashMap<(u32, u32), usize>>>,
     _temp_dir: Option<Arc<TempDataDir>>,
-    _close: Arc<CloseOnDrop>,
 }
 
 struct TempDataDir(std::path::PathBuf);
@@ -145,12 +189,14 @@ impl PGlite {
         let (cmd_tx, handle, boot_rx) = Engine::spawn(data_dir.clone(), options);
         match boot_rx.await {
             Ok(Ok(())) => Ok(PGlite {
-                _close: Arc::new(CloseOnDrop {
-                    cmd_tx: cmd_tx.clone(),
-                }),
-                cmd_tx,
+                backend: Backend::InProcess {
+                    _close: Arc::new(CloseOnDrop {
+                        cmd_tx: cmd_tx.clone(),
+                    }),
+                    cmd_tx,
+                    _handle: Arc::new(handle),
+                },
                 data_dir: Arc::new(data_dir),
-                _handle: Arc::new(handle),
                 tx_lock: Arc::new(Mutex::new(())),
                 listeners: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 next_listener: Arc::new(AtomicU64::new(0)),
@@ -319,13 +365,7 @@ impl PGlite {
 
     pub async fn close(self) -> Result<(), Error> {
         let _guard = self.tx_lock.lock().await;
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(EngineCommand::Close { reply })
-            .map_err(|_| Error::Closed)?;
-        let _ = rx.await;
-        OPEN.store(false, Ordering::SeqCst);
-        Ok(())
+        self.backend.close().await
     }
 
     pub(crate) async fn exec_unlocked(&self, sql: &str) -> Result<(), Error> {
@@ -515,20 +555,12 @@ impl PGlite {
     pub(crate) fn rollback_fire_and_forget(&self) {
         let mut wire = BytesMut::new();
         if frontend::query("ROLLBACK", &mut wire).is_ok() {
-            let (reply, _rx) = oneshot::channel();
-            let _ = self.cmd_tx.send(EngineCommand::Exec {
-                wire: wire.to_vec(),
-                reply,
-            });
+            self.backend.fire_and_forget(wire.to_vec());
         }
     }
 
     async fn roundtrip(&self, wire: Vec<u8>) -> Result<Vec<u8>, Error> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(EngineCommand::Exec { wire, reply })
-            .map_err(|_| Error::Closed)?;
-        rx.await.map_err(|_| Error::Closed)?
+        self.backend.roundtrip(wire).await
     }
 
     fn process_response(&self, response: &[u8]) -> Result<(), Error> {
