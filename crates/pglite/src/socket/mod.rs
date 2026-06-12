@@ -131,12 +131,76 @@ fn doorman_loop(db: PGlite, listener: UnixListener, stop: Arc<AtomicBool>, start
 }
 
 fn serve_client(
-    _db: &PGlite,
-    _stream: UnixStream,
-    _stop: &AtomicBool,
-    _startup_reply: &[u8],
+    db: &PGlite,
+    mut stream: UnixStream,
+    stop: &AtomicBool,
+    startup_reply: &[u8],
 ) -> Result<(), Error> {
-    Ok(())
+    read_startup(&mut stream)?;
+    stream.write_all(startup_reply).map_err(Error::Io)?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .map_err(Error::Io)?;
+
+    let mut pending: Vec<u8> = Vec::new();
+    let mut ready = true;
+    loop {
+        let mut tag = [0u8; 1];
+        match stream.read_exact(&mut tag) {
+            Ok(()) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if stop.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                continue;
+            }
+            Err(_) => return Ok(()),
+        }
+        if tag[0] == b'X' {
+            return Ok(());
+        }
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).map_err(Error::Io)?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame = vec![0u8; len.saturating_sub(4)];
+        stream.read_exact(&mut frame).map_err(Error::Io)?;
+        pending.push(tag[0]);
+        pending.extend_from_slice(&len_buf);
+        pending.extend_from_slice(&frame);
+
+        let flush = if ready {
+            matches!(tag[0], b'Q' | b'F' | b'S')
+        } else {
+            matches!(tag[0], b'c' | b'f')
+        };
+        if !flush {
+            continue;
+        }
+        let batch = std::mem::take(&mut pending);
+        let response = futures::executor::block_on(async {
+            let _guard = db.lock_for_transaction().await;
+            db.route(crate::db::Via::backend(), batch).await
+        })?;
+        ready = ends_ready(&response);
+        db.dispatch_notifications(&response);
+        stream.write_all(&response).map_err(Error::Io)?;
+    }
+}
+
+fn ends_ready(response: &[u8]) -> bool {
+    let mut offset = 0;
+    let mut last = 0u8;
+    while offset + 5 <= response.len() {
+        last = response[offset];
+        let len = u32::from_be_bytes(response[offset + 1..offset + 5].try_into().unwrap()) as usize;
+        offset += 1 + len.max(4);
+    }
+    last == b'Z'
 }
 
 fn read_startup(stream: &mut UnixStream) -> Result<(), Error> {
