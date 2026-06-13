@@ -8,7 +8,7 @@
 
 Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite), a single-process PostgreSQL fork, compiled natively and linked straight into your binary. No server, no Docker, no install step.
 
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust: 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](rust-toolchain.toml)
 [![Edition: 2021](https://img.shields.io/badge/edition-2021-orange.svg)](Cargo.toml)
 
@@ -209,4 +209,4 @@ We really appreciate any contribution — issues and pull requests are always we
 
 ## License
 
-[Apache-2.0](LICENSE). PostgreSQL itself is under the [PostgreSQL License](https://github.com/electric-sql/postgres-pglite/blob/main/COPYRIGHT).
+[MIT](LICENSE). PostgreSQL itself is under the [PostgreSQL License](https://github.com/electric-sql/postgres-pglite/blob/main/COPYRIGHT).
