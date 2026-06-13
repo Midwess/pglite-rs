@@ -18,7 +18,7 @@ name = "pglite"
 ruzstd = "0.8"
 
 [dependencies]
-pglite-rs-sys = { path = "../pglite-sys", version = "0.2.0" }
+pglite-rs-sys = { path = "../pglite-sys", version = "0.2.1" }
 futures = { version = "0.3", features = ["executor"] }
 postgres-protocol = "0.6"
 postgres-types = "0.2"
