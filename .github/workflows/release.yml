@@ -86,8 +86,7 @@ jobs:
         run: |
           rustup target add x86_64-pc-windows-gnullvm
           export CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER=clang
-          export RUST_BACKTRACE=1
-          cargo test -p pglite-rs -p pglite-rs-sys --target x86_64-pc-windows-gnullvm -- --nocapture --test-threads=1
+          cargo test -p pglite-rs -p pglite-rs-sys --target x86_64-pc-windows-gnullvm
 
       - name: Stage lib-crate payload
         shell: bash

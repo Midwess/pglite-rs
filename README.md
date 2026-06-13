@@ -185,7 +185,7 @@ cargo test --workspace
 ## Limitations
 
 - One open `PGlite` per process (`Error::AlreadyOpen`), and one engine boot per process lifetime — reopen after close requires a new process (`Error::ReopenUnsupported`). Reopening a data directory from a fresh process works fully.
-- macOS + Linux only. Windows is not supported.
+- Platforms: macOS (arm64, x86_64), Linux (x86_64, aarch64, glibc), and Windows x86_64. The Windows engine is built with the MinGW-w64/UCRT toolchain, so link against the `x86_64-pc-windows-gnu` or `x86_64-pc-windows-gnullvm` targets (the MSVC target is not supported). The `socket` and `multiple-process` features are unix-only.
 - `pg_dump` and a psql-compatible socket bridge are planned (`pglite-socket`).
 
 ## Maintainers

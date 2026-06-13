@@ -76,10 +76,19 @@ fn artifact_lib_dir() -> Option<PathBuf> {
     if env::var("CARGO_FEATURE_ICU").is_ok() {
         return None;
     }
-    let target = env::var("TARGET").unwrap().replace('-', "_").to_uppercase();
-    let root = env::var(format!("DEP_PGLITE_LIB_{target}_ROOT")).ok()?;
-    let dir = PathBuf::from(root).join("lib");
-    dir.join("libpglite.a").exists().then_some(dir)
+    // Cargo sets exactly one DEP_PGLITE_LIB_<links>_ROOT, for the artifact
+    // crate selected by this target's cfg. Scan for it rather than rebuilding
+    // the name from TARGET, since the windows-gnu lib crate also serves the
+    // windows-gnullvm target (different TARGET, same links key).
+    for (key, val) in env::vars() {
+        if key.starts_with("DEP_PGLITE_LIB_") && key.ends_with("_ROOT") {
+            let dir = PathBuf::from(val).join("lib");
+            if dir.join("libpglite.a").exists() {
+                return Some(dir);
+            }
+        }
+    }
+    None
 }
 
 fn download_prebuilt() -> PathBuf {
