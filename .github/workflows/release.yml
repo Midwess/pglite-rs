@@ -138,36 +138,32 @@ jobs:
             cp staged/lib-$target/* "crates/lib-$target/lib/"
           done
 
-      - name: Publish lib crates
+      - name: Publish crates to crates.io
         run: |
           ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu; do
-            name="pglite-rs-lib-$target"
-            if cargo search "$name" 2>/dev/null | grep -q "^$name = \"$ver\""; then
-              echo "$name $ver already on crates.io, skipping"
-              continue
+          # Idempotent + tolerant of crates.io's new-crate rate limit (429) and
+          # sparse-index propagation delay between dependent crates. Retries with
+          # a long backoff and fails the step if a crate never lands.
+          publish() {
+            local pkg="$1"; shift
+            if cargo search "$pkg" 2>/dev/null | grep -q "^$pkg = \"$ver\""; then
+              echo "::notice::$pkg $ver already on crates.io, skipping"
+              return 0
             fi
-            cargo publish -p "$name" --allow-dirty --no-verify
+            local i
+            for i in $(seq 1 30); do
+              if cargo publish -p "$pkg" "$@"; then
+                echo "::notice::published $pkg $ver"
+                return 0
+              fi
+              echo "::warning::publish $pkg attempt $i failed (rate limit or index propagation); retrying in 60s"
+              sleep 60
+            done
+            echo "::error::failed to publish $pkg $ver after retries"
+            return 1
+          }
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu; do
+            publish "pglite-rs-lib-$target" --allow-dirty --no-verify
           done
-
-      - name: Publish pglite-rs-sys
-        run: |
-          ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          if cargo search pglite-rs-sys 2>/dev/null | grep -q "^pglite-rs-sys = \"$ver\""; then
-            echo "pglite-rs-sys $ver already on crates.io, skipping"; exit 0
-          fi
-          for i in $(seq 1 10); do
-            cargo publish -p pglite-rs-sys --no-verify && break
-            sleep 30
-          done
-
-      - name: Publish pglite-rs
-        run: |
-          ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          if cargo search pglite-rs 2>/dev/null | grep -q "^pglite-rs = \"$ver\""; then
-            echo "pglite-rs $ver already on crates.io, skipping"; exit 0
-          fi
-          for i in $(seq 1 10); do
-            cargo publish -p pglite-rs --no-verify && break
-            sleep 30
-          done
+          publish pglite-rs-sys --no-verify
+          publish pglite-rs --no-verify
