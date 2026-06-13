@@ -179,7 +179,10 @@ fn replica_published_shape_and_rejections() {
         .err()
         .map(|e| e.to_string())
         .unwrap_or_default();
-    assert!(err.contains("REPLICA IDENTITY NOTHING"), "RI NOTHING: {err}");
+    assert!(
+        err.contains("REPLICA IDENTITY NOTHING"),
+        "RI NOTHING: {err}"
+    );
     block_on(Replica::decommission(&db, &reject_config)).unwrap();
 
     reset(&mut up);
