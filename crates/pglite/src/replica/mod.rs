@@ -1,6 +1,7 @@
 mod backfill;
 mod meta;
 mod pgoutput;
+mod tls;
 mod wire;
 
 use std::collections::HashMap;
@@ -41,6 +42,15 @@ fn cell_value(cell: &CellValue) -> Option<String> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SslMode {
+    #[default]
+    Disable,
+    Prefer,
+    Require,
+    VerifyFull,
+}
+
 #[derive(Clone, Debug)]
 pub struct ReplicaConfig {
     pub host: String,
@@ -53,6 +63,7 @@ pub struct ReplicaConfig {
     pub application_name: String,
     pub read_timeout: Duration,
     pub status_interval: Duration,
+    pub sslmode: SslMode,
 }
 
 impl Default for ReplicaConfig {
@@ -68,6 +79,7 @@ impl Default for ReplicaConfig {
             application_name: "pglite-replica".into(),
             read_timeout: Duration::from_secs(5),
             status_interval: Duration::from_secs(10),
+            sslmode: SslMode::Disable,
         }
     }
 }

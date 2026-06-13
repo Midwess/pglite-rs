@@ -27,6 +27,8 @@ libc = "0.2"
 tar = "0.4"
 bytes = "1"
 fallible-iterator = "0.2"
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = { version = "0.26", optional = true }
 
 [dev-dependencies]
 futures = { version = "0.3", features = ["executor"] }
@@ -40,7 +42,7 @@ socket = []
 pgcrypto = []
 pgvector = []
 icu = ["pglite-rs-sys/icu"]
-replica = []
+replica = ["dep:rustls", "dep:webpki-roots"]
 full = [
     "multiple-process",
     "socket",

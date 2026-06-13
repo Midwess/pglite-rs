@@ -11,13 +11,15 @@ use postgres_protocol::authentication::sasl::{ChannelBinding, ScramSha256, SCRAM
 use postgres_protocol::message::backend::{Header, Message};
 use postgres_protocol::message::frontend;
 
-use super::ReplicaConfig;
+use super::{ReplicaConfig, SslMode};
 use crate::error::Error;
 
 const PG_EPOCH_MICROS: i64 = 946_684_800_000_000;
+const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
 
 pub(crate) enum Stream {
     Tcp(TcpStream),
+    Tls(Box<super::tls::TlsStream>),
     #[cfg(unix)]
     Unix(UnixStream),
 }
@@ -34,15 +36,35 @@ impl Stream {
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| Error::Upstream(format!("cannot resolve host {}", config.host)))?;
-        Ok(Stream::Tcp(TcpStream::connect_timeout(
-            &addr,
-            config.read_timeout.max(Duration::from_secs(1)),
-        )?))
+        let mut tcp =
+            TcpStream::connect_timeout(&addr, config.read_timeout.max(Duration::from_secs(1)))?;
+        if config.sslmode == SslMode::Disable {
+            return Ok(Stream::Tcp(tcp));
+        }
+        tcp.write_all(&SSL_REQUEST)?;
+        let mut resp = [0u8; 1];
+        tcp.read_exact(&mut resp)?;
+        match resp[0] {
+            b'S' => Ok(Stream::Tls(Box::new(super::tls::upgrade(
+                tcp,
+                &config.host,
+                config.sslmode,
+            )?))),
+            b'N' if config.sslmode == SslMode::Prefer => Ok(Stream::Tcp(tcp)),
+            b'N' => Err(Error::Upstream(
+                "upstream refused SSL but sslmode requires it".into(),
+            )),
+            other => Err(Error::Protocol(format!(
+                "unexpected SSLRequest response: {}",
+                other as char
+            ))),
+        }
     }
 
     fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), Error> {
         match self {
             Stream::Tcp(s) => s.set_read_timeout(timeout)?,
+            Stream::Tls(s) => s.sock.set_read_timeout(timeout)?,
             #[cfg(unix)]
             Stream::Unix(s) => s.set_read_timeout(timeout)?,
         }
@@ -52,6 +74,7 @@ impl Stream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Stream::Tcp(s) => s.read(buf),
+            Stream::Tls(s) => s.read(buf),
             #[cfg(unix)]
             Stream::Unix(s) => s.read(buf),
         }
@@ -60,6 +83,7 @@ impl Stream {
     fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
         match self {
             Stream::Tcp(s) => s.write_all(buf),
+            Stream::Tls(s) => s.write_all(buf),
             #[cfg(unix)]
             Stream::Unix(s) => s.write_all(buf),
         }
@@ -69,6 +93,9 @@ impl Stream {
         match self {
             Stream::Tcp(s) => {
                 let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+            Stream::Tls(s) => {
+                let _ = s.sock.shutdown(std::net::Shutdown::Both);
             }
             #[cfg(unix)]
             Stream::Unix(s) => {
