@@ -52,7 +52,7 @@ jobs:
           msystem: UCRT64
           path-type: inherit
           pacboy: toolchain:p zlib:p clang:p libunwind:p
-          install: bison flex make perl git diffutils
+          install: bison flex make perl git diffutils zstd
 
       - name: Cache engine build
         uses: actions/cache@v4
@@ -88,14 +88,29 @@ jobs:
           export CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER=clang
           cargo test -p pglite-rs -p pglite-rs-sys --target x86_64-pc-windows-gnullvm
 
-      - name: Stage lib-crate payload
+      - name: Stage + verify lib-crate payload (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p stage
-          cp native/out/libpglite.a native/out/pglite-runtime.tar stage/
-          if [ "${{ runner.os }}" != "Windows" ]; then
-            cp native/out/pglite-ext-*-${{ matrix.target }}.tar.gz stage/
-          fi
+          zstd -19 -q -o stage/libpglite.a.zst native/out/libpglite.a
+          zstd -19 -q -o stage/pglite-runtime.tar.zst native/out/pglite-runtime.tar
+          cp native/out/pglite-ext-*-${{ matrix.target }}.tar.gz stage/
+          ls -l stage/
+          # Exercise the published-crate path: build against only the .zst payload
+          libdir="$RUNNER_TEMP/pglite-zst"
+          mkdir -p "$libdir"
+          cp stage/libpglite.a.zst stage/pglite-runtime.tar.zst "$libdir/"
+          PGLITE_LIB_DIR="$libdir" cargo build -p pglite-rs --tests
+
+      - name: Stage lib-crate payload (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          mkdir -p stage
+          zstd -19 -q -o stage/libpglite.a.zst native/out/libpglite.a
+          zstd -19 -q -o stage/pglite-runtime.tar.zst native/out/pglite-runtime.tar
+          ls -l stage/
 
       - uses: actions/upload-artifact@v4
         with:

@@ -14,6 +14,9 @@ categories = ["database", "database-implementations"]
 [lib]
 name = "pglite"
 
+[build-dependencies]
+ruzstd = "0.8"
+
 [dependencies]
 pglite-rs-sys = { path = "../pglite-sys", version = "0.1.0" }
 futures = { version = "0.3", features = ["executor"] }

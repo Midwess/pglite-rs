@@ -15,6 +15,9 @@ categories = ["external-ffi-bindings", "database"]
 [lib]
 name = "pglite_sys"
 
+[build-dependencies]
+ruzstd = "0.8"
+
 [dependencies]
 libc = "0.2"
 

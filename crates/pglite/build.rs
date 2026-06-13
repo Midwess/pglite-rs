@@ -24,8 +24,7 @@ fn main() {
     }
 
     let lib_dir = resolve_lib_dir();
-    let base_tar = lib_dir.join("pglite-runtime.tar");
-    println!("cargo:rerun-if-changed={}", base_tar.display());
+    let base_tar = resolve_base_tar(&lib_dir);
 
     let enabled: Vec<&str> = EXTENSIONS
         .iter()
@@ -83,6 +82,41 @@ fn variant_subdir() -> &'static str {
 
 fn resolve_lib_dir() -> PathBuf {
     PathBuf::from(env::var("DEP_PGLITE_LIB_DIR").expect("pglite-rs-sys did not export lib_dir"))
+}
+
+// The runtime payload ships as pglite-runtime.tar.zst in published artifact
+// crates (to fit crates.io's size limit) and as a plain pglite-runtime.tar in
+// local/dev trees and the download fallback. Return a path to a plain tar,
+// decompressing into OUT_DIR when only the .zst is present.
+fn resolve_base_tar(lib_dir: &Path) -> PathBuf {
+    let plain = lib_dir.join("pglite-runtime.tar");
+    if plain.exists() {
+        println!("cargo:rerun-if-changed={}", plain.display());
+        return plain;
+    }
+    let zst = lib_dir.join("pglite-runtime.tar.zst");
+    if zst.exists() {
+        println!("cargo:rerun-if-changed={}", zst.display());
+        let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("pglite-runtime-base.tar");
+        zstd_decompress(&zst, &out);
+        return out;
+    }
+    panic!(
+        "no pglite-runtime.tar or pglite-runtime.tar.zst in {}",
+        lib_dir.display()
+    );
+}
+
+fn zstd_decompress(src: &Path, dst: &Path) {
+    use std::io::Read;
+    let f = std::fs::File::open(src).unwrap_or_else(|e| panic!("open {}: {e}", src.display()));
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(f)
+        .unwrap_or_else(|e| panic!("zstd init for {}: {e}", src.display()));
+    let mut buf = Vec::new();
+    decoder
+        .read_to_end(&mut buf)
+        .unwrap_or_else(|e| panic!("zstd decode {}: {e}", src.display()));
+    std::fs::write(dst, buf).unwrap_or_else(|e| panic!("write {}: {e}", dst.display()));
 }
 
 fn cache_dir() -> PathBuf {

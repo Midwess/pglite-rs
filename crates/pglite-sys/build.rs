@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const ENGINE_TAG: &str = "engine-06c837c6a303-p2";
@@ -14,7 +14,12 @@ fn main() {
 
     let lib_dir = resolve_lib_dir();
     println!("cargo:lib_dir={}", lib_dir.display());
-    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    // Published artifact crates ship libpglite.a.zst (the engine is too large
+    // for crates.io's 10 MiB limit otherwise); decompress it into OUT_DIR and
+    // link from there. Local/dev trees and the download fallback carry a plain
+    // libpglite.a, in which case the lib dir is used directly.
+    let link_dir = prepare_static_lib(&lib_dir);
+    println!("cargo:rustc-link-search=native={}", link_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=pglite");
     println!("cargo:rustc-link-lib=z");
     match env::var("CARGO_CFG_TARGET_OS").as_deref() {
@@ -35,6 +40,28 @@ fn main() {
             }
         }
     }
+}
+
+fn prepare_static_lib(lib_dir: &Path) -> PathBuf {
+    let zst = lib_dir.join("libpglite.a.zst");
+    if zst.exists() {
+        let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+        zstd_decompress(&zst, &out_dir.join("libpglite.a"));
+        return out_dir;
+    }
+    lib_dir.to_path_buf()
+}
+
+fn zstd_decompress(src: &Path, dst: &std::path::Path) {
+    use std::io::Read;
+    let f = std::fs::File::open(src).unwrap_or_else(|e| panic!("open {}: {e}", src.display()));
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(f)
+        .unwrap_or_else(|e| panic!("zstd init for {}: {e}", src.display()));
+    let mut buf = Vec::new();
+    decoder
+        .read_to_end(&mut buf)
+        .unwrap_or_else(|e| panic!("zstd decode {}: {e}", src.display()));
+    std::fs::write(dst, buf).unwrap_or_else(|e| panic!("write {}: {e}", dst.display()));
 }
 
 fn variant_subdir() -> &'static str {
