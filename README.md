@@ -24,8 +24,6 @@ Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite), a s
 - [Examples](#examples)
 - [Building](#building)
 - [API](#api)
-- [Limitations](#limitations)
-- [Maintainers](#maintainers)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -39,7 +37,7 @@ The crate is runtime-agnostic. It depends on `futures`, not on `tokio`, `smol`, 
 
 Because the engine runs as one in-process backend — no separate server, no postmaster, and with parallel/background workers disabled — its memory use is a small fraction of a standalone PostgreSQL server. And because it is compiled to a native static library rather than WebAssembly, you get native execution speed with none of the WASM memory tax: no linear-memory heap that can only grow, no `initdb` bootstrap stranded inside the module for the life of the process, and memory that is actually returned to the OS.
 
-The numbers below are measured, not estimated — each example program in [`examples/`](examples/) runs the same workload (open, `CREATE TABLE`, insert, query, transaction rollback) under `/usr/bin/time -l` with RSS sampled every 50 ms on macOS (Apple Silicon, release build):
+The numbers below are measured, not estimated — each example program in [`examples`](examples) runs the same workload (open, `CREATE TABLE`, insert, query, transaction rollback) under `/usr/bin/time -l` with RSS sampled every 50 ms on macOS (Apple Silicon, release build):
 
 | Mode | Steady-state RSS | Peak RSS (during init) |
 | --- | --- | --- |
@@ -205,19 +203,9 @@ cargo test --workspace
 | `Replica` / `ReplicaConfig` | Logical-replication consumer over a unix socket. |
 | `Error` | Flat `thiserror` enum. `Database` carries `sqlstate`. `AlreadyOpen`, `Closed`, `Boot`, `PoolExhausted`, `ReplicaHalted`, etc. |
 
-## Limitations
-
-- One open `PGlite` per process (`Error::AlreadyOpen`), and one engine boot per process lifetime — reopen after close requires a new process (`Error::ReopenUnsupported`). Reopening a data directory from a fresh process works fully.
-- Platforms: macOS (arm64, x86_64), Linux (x86_64, aarch64, glibc), and Windows x86_64. The Windows engine is built with the MinGW-w64/UCRT toolchain, so link against the `x86_64-pc-windows-gnu` or `x86_64-pc-windows-gnullvm` targets (the MSVC target is not supported). The `socket` and `multiple-process` features are unix-only.
-- `pg_dump` and a psql-compatible socket bridge are planned (`pglite-socket`).
-
-## Maintainers
-
-[@Midwess](https://github.com/Midwess)
-
 ## Contributing
 
-Issues and pull requests welcome. Please read the project guidelines before submitting a change. Significant work should be preceded by an issue describing the design.
+We really appreciate any contribution — issues and pull requests are always welcome.
 
 ## License
 
