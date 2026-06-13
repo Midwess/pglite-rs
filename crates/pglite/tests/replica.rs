@@ -223,3 +223,171 @@ fn replica_end_to_end() {
 
     block_on(db.close()).unwrap();
 }
+
+#[test]
+fn replica_models_published_shape() {
+    let Ok(host) = std::env::var("PGLITE_REPLICA_UPSTREAM_HOST") else {
+        eprintln!("skipping replica shape test: PGLITE_REPLICA_UPSTREAM_HOST not set");
+        return;
+    };
+    let port: u16 = env_or("PGLITE_REPLICA_UPSTREAM_PORT", "5432")
+        .parse()
+        .unwrap();
+    let user = env_or("PGLITE_REPLICA_UPSTREAM_USER", "postgres");
+    let password = env_or("PGLITE_REPLICA_UPSTREAM_PASSWORD", "postgres");
+    let database = env_or("PGLITE_REPLICA_UPSTREAM_DB", "postgres");
+
+    let mut up = postgres::Client::connect(
+        &format!("host={host} port={port} user={user} password={password} dbname={database}"),
+        postgres::NoTls,
+    )
+    .unwrap();
+
+    let version: i32 = up
+        .query_one("SELECT current_setting('server_version_num')::int", &[])
+        .unwrap()
+        .get(0);
+    if version < 150000 {
+        eprintln!("skipping replica shape test: upstream older than PG15 (no column lists)");
+        return;
+    }
+
+    up.batch_execute("DROP PUBLICATION IF EXISTS pglite_shape_pub")
+        .unwrap();
+    let _ = up.execute(
+        "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = 'pglite_shape_slot'",
+        &[],
+    );
+    up.batch_execute(
+        "DROP TABLE IF EXISTS public.shape;
+         CREATE TABLE public.shape (
+            id int PRIMARY KEY,
+            a int NOT NULL,
+            g int GENERATED ALWAYS AS (a * 2) STORED,
+            secret text
+         );
+         INSERT INTO public.shape (id, a, secret) VALUES (1, 10, 's1'), (2, 20, 's2');
+         CREATE PUBLICATION pglite_shape_pub FOR TABLE public.shape (id, a);",
+    )
+    .unwrap();
+
+    let db = block_on(PGlite::open_temp()).unwrap();
+    let config = ReplicaConfig {
+        host: host.clone(),
+        port,
+        user,
+        password,
+        database,
+        publication: "pglite_shape_pub".into(),
+        slot_name: "pglite_shape_slot".into(),
+        read_timeout: Duration::from_secs(2),
+        ..Default::default()
+    };
+
+    let replica = block_on(Replica::start(db.clone(), config.clone())).expect("replica start");
+
+    let rows = block_on(db.query("SELECT id, a FROM shape ORDER BY id", &[])).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<i32>(0).unwrap(), 1);
+    assert_eq!(rows[0].get::<i32>(1).unwrap(), 10);
+    assert!(block_on(db.query("SELECT g FROM shape", &[])).is_err());
+    assert!(block_on(db.query("SELECT secret FROM shape", &[])).is_err());
+
+    let events = replica.subscribe();
+    up.execute(
+        "INSERT INTO public.shape (id, a, secret) VALUES (3, 30, 's3')",
+        &[],
+    )
+    .unwrap();
+    let first = events.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert!(matches!(first.changes[0], RowChange::Insert { .. }));
+    assert!(!replica.is_halted());
+    let rows = block_on(db.query("SELECT id, a FROM shape ORDER BY id", &[])).unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[2].get::<i32>(1).unwrap(), 30);
+
+    replica.stop();
+    assert!(wait_until(Duration::from_secs(10), || replica.is_stopped()));
+    assert!(!replica.is_halted());
+
+    block_on(Replica::decommission(&db, &config)).unwrap();
+    let _ = up.batch_execute(
+        "DROP PUBLICATION IF EXISTS pglite_shape_pub; DROP TABLE IF EXISTS public.shape;",
+    );
+    block_on(db.close()).unwrap();
+}
+
+#[test]
+fn replica_rejects_unreplicable_publications() {
+    let Ok(host) = std::env::var("PGLITE_REPLICA_UPSTREAM_HOST") else {
+        eprintln!("skipping replica rejection test: PGLITE_REPLICA_UPSTREAM_HOST not set");
+        return;
+    };
+    let port: u16 = env_or("PGLITE_REPLICA_UPSTREAM_PORT", "5432")
+        .parse()
+        .unwrap();
+    let user = env_or("PGLITE_REPLICA_UPSTREAM_USER", "postgres");
+    let password = env_or("PGLITE_REPLICA_UPSTREAM_PASSWORD", "postgres");
+    let database = env_or("PGLITE_REPLICA_UPSTREAM_DB", "postgres");
+
+    let mut up = postgres::Client::connect(
+        &format!("host={host} port={port} user={user} password={password} dbname={database}"),
+        postgres::NoTls,
+    )
+    .unwrap();
+
+    let config = ReplicaConfig {
+        host: host.clone(),
+        port,
+        user,
+        password,
+        database,
+        publication: "pglite_reject_pub".into(),
+        slot_name: "pglite_reject_slot".into(),
+        read_timeout: Duration::from_secs(2),
+        ..Default::default()
+    };
+
+    let reset = |up: &mut postgres::Client| {
+        up.batch_execute("DROP PUBLICATION IF EXISTS pglite_reject_pub")
+            .unwrap();
+        let _ = up.execute(
+            "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = 'pglite_reject_slot'",
+            &[],
+        );
+        up.batch_execute("DROP TABLE IF EXISTS public.reject_t")
+            .unwrap();
+    };
+
+    let db = block_on(PGlite::open_temp()).unwrap();
+
+    reset(&mut up);
+    up.batch_execute(
+        "CREATE TABLE public.reject_t (id int PRIMARY KEY, v text);
+         ALTER TABLE public.reject_t REPLICA IDENTITY NOTHING;
+         CREATE PUBLICATION pglite_reject_pub FOR TABLE public.reject_t;",
+    )
+    .unwrap();
+    let err = block_on(Replica::start(db.clone(), config.clone()))
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("REPLICA IDENTITY NOTHING"), "case A: {err}");
+    block_on(Replica::decommission(&db, &config)).unwrap();
+
+    reset(&mut up);
+    up.batch_execute(
+        "CREATE TABLE public.reject_t (id int PRIMARY KEY, v text);
+         CREATE PUBLICATION pglite_reject_pub FOR TABLE public.reject_t WITH (publish = 'insert');",
+    )
+    .unwrap();
+    let err = block_on(Replica::start(db.clone(), config.clone()))
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("does not publish"), "case B: {err}");
+    block_on(Replica::decommission(&db, &config)).unwrap();
+
+    reset(&mut up);
+    block_on(db.close()).unwrap();
+}

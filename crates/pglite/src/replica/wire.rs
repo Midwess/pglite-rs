@@ -368,6 +368,15 @@ impl ReplConn {
             .filter(|ms| *ms > 0))
     }
 
+    pub(crate) fn server_version_num(&mut self) -> Result<u32, Error> {
+        let rows = self.simple_query("SHOW server_version_num")?;
+        rows.first()
+            .and_then(|r| r.first())
+            .and_then(|v| v.as_deref())
+            .and_then(|s| s.parse::<u32>().ok())
+            .ok_or_else(|| Error::Protocol("could not read server_version_num".into()))
+    }
+
     pub(crate) fn read_copy_message(&mut self) -> Result<Option<ReplMsg>, Error> {
         loop {
             if let Some(msg) =

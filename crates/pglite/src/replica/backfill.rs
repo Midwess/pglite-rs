@@ -50,16 +50,60 @@ pub(crate) fn fingerprint(tables: &[TableDef]) -> String {
         .join("\n")
 }
 
+fn published_columns_filter(server_version_num: u32) -> &'static str {
+    if server_version_num >= 150000 {
+        "AND a.attgenerated = '' AND a.attname = ANY(pt.attnames)"
+    } else {
+        "AND a.attgenerated = ''"
+    }
+}
+
+fn validate_publish_ops(publication: &str, flags: [bool; 4]) -> Result<(), Error> {
+    for (published, op) in flags.iter().zip(["insert", "update", "delete", "truncate"]) {
+        if !*published {
+            return Err(Error::ReplicaConfig(format!(
+                "publication {publication} does not publish {op}; the replica cache would silently diverge"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn check_replica_identity(schema: &str, table: &str, relreplident: &str) -> Result<(), Error> {
+    if relreplident == "n" {
+        return Err(Error::ReplicaConfig(format!(
+            "published table {schema}.{table} has REPLICA IDENTITY NOTHING; its updates and deletes cannot be replicated"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<TableDef>, Error> {
     let pub_lit = lit(publication);
+
+    let ops = snap.simple_query(&format!(
+        "SELECT pubinsert::int, pubupdate::int, pubdelete::int, pubtruncate::int \
+         FROM pg_publication WHERE pubname = {pub_lit}"
+    ))?;
+    let ops_row = ops
+        .first()
+        .ok_or_else(|| Error::ReplicaConfig(format!("publication {publication} does not exist")))?;
+    let published = |i: usize| ops_row.get(i).and_then(|v| v.as_deref()) == Some("1");
+    validate_publish_ops(
+        publication,
+        [published(0), published(1), published(2), published(3)],
+    )?;
+
+    let col_filter = published_columns_filter(snap.server_version_num()?);
     let cols = snap.simple_query(&format!(
         "SELECT pt.schemaname::text, pt.tablename::text, a.attname::text, \
-                format_type(a.atttypid, a.atttypmod), a.attnotnull::text, a.atttypid::text \
+                format_type(a.atttypid, a.atttypmod), a.attnotnull::text, a.atttypid::text, \
+                c.relreplident::text \
          FROM pg_publication_tables pt \
          JOIN pg_namespace n ON n.nspname = pt.schemaname \
          JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename \
          JOIN pg_attribute a ON a.attrelid = c.oid \
-         WHERE pt.pubname = {pub_lit} AND a.attnum > 0 AND NOT a.attisdropped \
+         WHERE pt.pubname = {pub_lit} AND a.attnum > 0 AND NOT a.attisdropped {col_filter} \
          ORDER BY pt.schemaname, pt.tablename, a.attnum"
     ))?;
     if cols.is_empty() {
@@ -82,6 +126,7 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
             .map(|t| t.schema != schema || t.name != table)
             .unwrap_or(true)
         {
+            check_replica_identity(schema, table, get(6)?)?;
             tables.push(TableDef {
                 schema: schema.to_string(),
                 name: table.to_string(),
@@ -172,9 +217,15 @@ pub(crate) fn copy_tables(
 ) -> Result<(), Error> {
     for t in tables {
         let target = format!("{}.{}", ident(&t.schema), ident(&t.name));
-        let copy_in_sql = format!("COPY {target} FROM STDIN");
+        let col_list = t
+            .columns
+            .iter()
+            .map(|c| ident(&c.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let copy_in_sql = format!("COPY {target} ({col_list}) FROM STDIN");
         let mut batch: Vec<u8> = Vec::with_capacity(COPY_BATCH_BYTES);
-        snap.copy_out(&format!("COPY {target} TO STDOUT"), |chunk| {
+        snap.copy_out(&format!("COPY {target} ({col_list}) TO STDOUT"), |chunk| {
             batch.extend_from_slice(chunk);
             if batch.len() >= COPY_BATCH_BYTES {
                 block_on(db.copy_in(&copy_in_sql, &batch))?;
@@ -187,4 +238,52 @@ pub(crate) fn copy_tables(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_filter_gates_attnames_on_pg15() {
+        assert_eq!(published_columns_filter(140000), "AND a.attgenerated = ''");
+        assert_eq!(
+            published_columns_filter(150000),
+            "AND a.attgenerated = '' AND a.attname = ANY(pt.attnames)"
+        );
+        assert_eq!(
+            published_columns_filter(170004),
+            "AND a.attgenerated = '' AND a.attname = ANY(pt.attnames)"
+        );
+    }
+
+    #[test]
+    fn publish_ops_requires_all_four() {
+        assert!(validate_publish_ops("p", [true, true, true, true]).is_ok());
+        for missing in 0..4 {
+            let mut flags = [true; 4];
+            flags[missing] = false;
+            let err = validate_publish_ops("p", flags).unwrap_err().to_string();
+            assert!(
+                err.contains("does not publish") && err.contains("diverge"),
+                "{err}"
+            );
+        }
+        let err = validate_publish_ops("p", [true, false, true, true])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("update"), "{err}");
+    }
+
+    #[test]
+    fn replica_identity_nothing_rejected() {
+        for ok in ["d", "f", "i"] {
+            assert!(check_replica_identity("public", "t", ok).is_ok());
+        }
+        let err = check_replica_identity("public", "t", "n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("REPLICA IDENTITY NOTHING"), "{err}");
+        assert!(err.contains("public.t"), "{err}");
+    }
 }
