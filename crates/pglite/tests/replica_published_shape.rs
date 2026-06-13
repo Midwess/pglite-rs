@@ -144,6 +144,64 @@ fn replica_published_shape_and_rejections() {
         let _ = up.batch_execute(
             "DROP PUBLICATION IF EXISTS pglite_shape_pub; DROP TABLE IF EXISTS public.shape;",
         );
+
+        up.batch_execute("DROP PUBLICATION IF EXISTS pglite_filt_pub")
+            .unwrap();
+        let _ = up.execute(
+            "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = 'pglite_filt_slot'",
+            &[],
+        );
+        up.batch_execute(
+            "DROP TABLE IF EXISTS public.filt;
+             CREATE TABLE public.filt (id int PRIMARY KEY, v text);
+             CREATE INDEX filt_v_idx ON public.filt (v);
+             INSERT INTO public.filt VALUES (1, 'a'), (2, 'b'), (3, 'c');
+             CREATE PUBLICATION pglite_filt_pub FOR TABLE public.filt WHERE (id >= 2);",
+        )
+        .unwrap();
+
+        let filt_config = ReplicaConfig {
+            host: host.clone(),
+            port,
+            user: user.clone(),
+            password: password.clone(),
+            database: database.clone(),
+            publication: "pglite_filt_pub".into(),
+            slot_name: "pglite_filt_slot".into(),
+            read_timeout: Duration::from_secs(2),
+            ..Default::default()
+        };
+        let filt_replica =
+            block_on(Replica::start(db.clone(), filt_config.clone())).expect("filt replica start");
+
+        let ids = block_on(db.query("SELECT id FROM filt ORDER BY id", &[])).unwrap();
+        let ids: Vec<i32> = ids.iter().map(|r| r.get::<i32>(0).unwrap()).collect();
+        assert_eq!(
+            ids,
+            vec![2, 3],
+            "publication row filter not applied to backfill"
+        );
+
+        let idx = block_on(db.query(
+            "SELECT indexname::text FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'filt'",
+            &[],
+        ))
+        .unwrap();
+        let names: Vec<String> = idx
+            .iter()
+            .map(|r| r.get::<&str>(0).unwrap().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "filt_v_idx"),
+            "secondary index not replicated: {names:?}"
+        );
+
+        filt_replica.stop();
+        assert!(wait_until(Duration::from_secs(10), || filt_replica.is_stopped()));
+        block_on(Replica::decommission(&db, &filt_config)).unwrap();
+        let _ = up.batch_execute(
+            "DROP PUBLICATION IF EXISTS pglite_filt_pub; DROP TABLE IF EXISTS public.filt;",
+        );
     }
 
     let reject_config = ReplicaConfig {

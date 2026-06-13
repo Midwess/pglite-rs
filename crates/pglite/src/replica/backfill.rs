@@ -19,6 +19,8 @@ pub(crate) struct TableDef {
     pub name: String,
     pub columns: Vec<ColDef>,
     pub pk: Vec<String>,
+    pub row_filter: Option<String>,
+    pub indexes: Vec<String>,
 }
 
 pub(crate) fn fingerprint_line<'a>(
@@ -94,11 +96,17 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
         [published(0), published(1), published(2), published(3)],
     )?;
 
-    let col_filter = published_columns_filter(snap.server_version_num()?);
+    let version = snap.server_version_num()?;
+    let col_filter = published_columns_filter(version);
+    let rowfilter_col = if version >= 150000 {
+        "pt.rowfilter"
+    } else {
+        "NULL::text"
+    };
     let cols = snap.simple_query(&format!(
         "SELECT pt.schemaname::text, pt.tablename::text, a.attname::text, \
                 format_type(a.atttypid, a.atttypmod), a.attnotnull::int, a.atttypid::text, \
-                c.relreplident::text \
+                c.relreplident::text, {rowfilter_col} \
          FROM pg_publication_tables pt \
          JOIN pg_namespace n ON n.nspname = pt.schemaname \
          JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename \
@@ -132,6 +140,8 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
                 name: table.to_string(),
                 columns: Vec::new(),
                 pk: Vec::new(),
+                row_filter: row.get(7).and_then(|v| v.as_deref()).map(str::to_string),
+                indexes: Vec::new(),
             });
         }
         let type_oid: u32 = get(5)?
@@ -164,6 +174,39 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
             .find(|t| t.schema == schema && t.name == table)
         {
             t.pk.push(col.to_string());
+        }
+    }
+
+    let unpublished_pred = if version >= 150000 {
+        "a2.attname <> ALL(pt.attnames)"
+    } else {
+        "false"
+    };
+    let index_defs = snap.simple_query(&format!(
+        "SELECT pt.schemaname::text, pt.tablename::text, pg_get_indexdef(i.indexrelid) \
+         FROM pg_publication_tables pt \
+         JOIN pg_namespace n ON n.nspname = pt.schemaname \
+         JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename \
+         JOIN pg_index i ON i.indrelid = c.oid \
+         WHERE pt.pubname = {pub_lit} \
+           AND NOT i.indisprimary AND i.indisvalid AND i.indisready \
+           AND i.indexprs IS NULL AND i.indpred IS NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM unnest(string_to_array(i.indkey::text, ' ')::int[]) AS col(attnum) \
+             JOIN pg_attribute a2 ON a2.attrelid = c.oid AND a2.attnum = col.attnum \
+             WHERE col.attnum > 0 AND {unpublished_pred} \
+           ) \
+         ORDER BY pt.schemaname, pt.tablename"
+    ))?;
+    for row in &index_defs {
+        let schema = row.first().and_then(|v| v.as_deref()).unwrap_or_default();
+        let table = row.get(1).and_then(|v| v.as_deref()).unwrap_or_default();
+        let def = row.get(2).and_then(|v| v.as_deref()).unwrap_or_default();
+        if let Some(t) = tables
+            .iter_mut()
+            .find(|t| t.schema == schema && t.name == table)
+        {
+            t.indexes.push(def.to_string());
         }
     }
 
@@ -205,6 +248,9 @@ pub(crate) fn bootstrap_schema(db: &PGlite, tables: &[TableDef]) -> Result<(), E
             ));
             db.exec(&format!("CREATE TABLE {target} ({})", defs.join(", ")))
                 .await?;
+            for index in &t.indexes {
+                db.query(index, &[]).await?;
+            }
         }
         Ok(())
     })
@@ -224,8 +270,14 @@ pub(crate) fn copy_tables(
             .collect::<Vec<_>>()
             .join(", ");
         let copy_in_sql = format!("COPY {target} ({col_list}) FROM STDIN");
+        let copy_out_sql = match &t.row_filter {
+            Some(filter) => {
+                format!("COPY (SELECT {col_list} FROM {target} WHERE {filter}) TO STDOUT")
+            }
+            None => format!("COPY {target} ({col_list}) TO STDOUT"),
+        };
         let mut batch: Vec<u8> = Vec::with_capacity(COPY_BATCH_BYTES);
-        snap.copy_out(&format!("COPY {target} ({col_list}) TO STDOUT"), |chunk| {
+        snap.copy_out(&copy_out_sql, |chunk| {
             batch.extend_from_slice(chunk);
             if batch.len() >= COPY_BATCH_BYTES {
                 block_on(db.copy_in(&copy_in_sql, &batch))?;
