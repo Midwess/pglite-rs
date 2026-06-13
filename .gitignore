@@ -1,13 +1,5 @@
-.dev/agent-os/
-.dev/astack-in-vercel/
-.dev/chat-room/
-.dev/chat-room-unified/
-.dev/chat-room-unified-directives/
-.dev/chat-room-vercel/
-.dev/crux/
-.dev/hlang/
-.dev/rs-engine/
-.dev/workflow/
+.dev/
+CONTEXT.md
 
 target/
 node_modules/
