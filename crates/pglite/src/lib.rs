@@ -2,8 +2,10 @@
 //! async on any runtime.
 //!
 //! Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite),
-//! the PostgreSQL fork powering [PGlite](https://pglite.dev/), compiled natively
-//! and linked straight into your binary. No server, no Docker, no install step.
+//! a single-process PostgreSQL fork, compiled natively and linked straight into
+//! your binary. No server, no Docker, no install step. Because it runs as one
+//! in-process backend with background and parallel workers disabled, its memory
+//! footprint is a small fraction of a standalone PostgreSQL server.
 //!
 //! The package is named `pglite-rs`; the library imports as `pglite`:
 //!

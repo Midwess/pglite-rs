@@ -1,12 +1,12 @@
 <p align="center">
-  <img src=".github/assets/elephant.png" alt="pglite-rs logo" width="140" />
+  <img src="https://raw.githubusercontent.com/Midwess/pglite-rs/main/.github/assets/elephant.png" alt="pglite-rs logo" width="140" />
 </p>
 
 # pglite-rs
 
 > In-process PostgreSQL for Rust — embedded like SQLite, full Postgres SQL, async on any runtime.
 
-Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite), the PostgreSQL fork powering [PGlite](https://pglite.dev/), compiled natively and linked straight into your binary. No server, no Docker, no install step.
+Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite), a single-process PostgreSQL fork, compiled natively and linked straight into your binary. No server, no Docker, no install step.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust: 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](rust-toolchain.toml)
@@ -15,6 +15,7 @@ Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite), the
 ## Table of Contents
 
 - [Background](#background)
+- [Memory footprint](#memory-footprint)
 - [Install](#install)
 - [Usage](#usage)
 - [Features](#features)
@@ -30,9 +31,31 @@ Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite), the
 
 ## Background
 
-PGlite is a WASM build of PostgreSQL maintained by ElectricSQL. `pglite-rs` takes the same PGlite source, compiles it to a native static library, and exposes a safe async Rust API around it. The result is real PostgreSQL semantics — types, transactions, MVCC, extensions, wire protocol — embedded in your process, with the same embeddable footprint people expect from SQLite.
+`postgres-pglite` is a fork of PostgreSQL that runs the whole engine in a single process with no postmaster, background workers, or sockets. `pglite-rs` compiles that fork to a native static library and exposes a safe async Rust API around it. The result is real PostgreSQL semantics — types, transactions, MVCC, extensions, wire protocol — embedded directly in your process, with the same embeddable footprint people expect from SQLite.
 
 The crate is runtime-agnostic. It depends on `futures`, not on `tokio`, `smol`, or `async-std`; pick whichever executor your application already uses.
+
+## Memory footprint
+
+Because the engine runs as one in-process backend — no separate server, no postmaster, and with parallel/background workers disabled — its memory use is a small fraction of a standalone PostgreSQL server. And because it is compiled to a native static library rather than WebAssembly, you get native execution speed with none of the WASM memory tax: no linear-memory heap that can only grow, no `initdb` bootstrap stranded inside the module for the life of the process, and memory that is actually returned to the OS.
+
+The numbers below are measured, not estimated — each example program in [`examples/`](examples/) runs the same workload (open, `CREATE TABLE`, insert, query, transaction rollback) under `/usr/bin/time -l` with RSS sampled every 50 ms on macOS (Apple Silicon, release build):
+
+| Mode | Steady-state RSS | Peak RSS (during init) |
+| --- | --- | --- |
+| Single in-process backend (`open_temp`) | **~34 MB** | ~48 MB |
+| Multi-process pool, 4 live connections (`open_multi_process`) | ~101 MB across 15 processes¹ | ~101 MB |
+
+For comparison, the WebAssembly build of PGlite (`@electric-sql/pglite` 0.5.2) running the identical workload:
+
+| Host | Steady-state RSS | Peak RSS (during init) |
+| --- | --- | --- |
+| Node 25 | ~490–510 MB | ~1.6 GB |
+| Chrome renderer | ~710 MB | ~1.15 GB |
+
+That is roughly a **15–20× smaller steady-state footprint** for the same database, with native query speed and a multi-connection mode the WASM build cannot offer. A single embedded backend adds little to your process beyond Postgres's own shared buffers; the shared memory is emulated on the heap and released when the engine closes, and there are no idle worker processes sitting resident. That makes it practical to embed in CLIs, desktop apps, tests, and edge/serverless workloads where both a full Postgres server and a 700 MB WASM instance would be far too heavy.
+
+¹ Summed RSS over the whole Postgres process tree; this over-counts because every backend maps the same shared-buffers segment, so the true physical footprint is lower. The single in-process number is near-exact.
 
 ## Install
 
@@ -134,7 +157,7 @@ External clients get `extra_connections` postmaster slots (default 4) — size i
 └─────────────────────────────────────┘
 ```
 
-The engine is real PostgreSQL with PGlite's patches: the main loop is callable, socket IO is routed through in-memory callbacks, and exits/longjmps are contained in a C trampoline. All engine calls are confined to one dedicated thread; your async calls communicate with it through channels. Data crosses the FFI boundary only as Postgres wire-protocol bytes.
+The engine is real PostgreSQL with postgres-pglite's patches: the main loop is callable, socket IO is routed through in-memory callbacks, and exits/longjmps are contained in a C trampoline. All engine calls are confined to one dedicated thread; your async calls communicate with it through channels. Data crosses the FFI boundary only as Postgres wire-protocol bytes.
 
 ## Examples
 
