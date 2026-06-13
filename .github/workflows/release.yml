@@ -125,12 +125,22 @@ jobs:
 
       - name: Publish lib crates
         run: |
+          ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu; do
-            cargo publish -p "pglite-rs-lib-$target" --allow-dirty --no-verify
+            name="pglite-rs-lib-$target"
+            if cargo search "$name" 2>/dev/null | grep -q "^$name = \"$ver\""; then
+              echo "$name $ver already on crates.io, skipping"
+              continue
+            fi
+            cargo publish -p "$name" --allow-dirty --no-verify
           done
 
       - name: Publish pglite-rs-sys
         run: |
+          ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if cargo search pglite-rs-sys 2>/dev/null | grep -q "^pglite-rs-sys = \"$ver\""; then
+            echo "pglite-rs-sys $ver already on crates.io, skipping"; exit 0
+          fi
           for i in $(seq 1 10); do
             cargo publish -p pglite-rs-sys --no-verify && break
             sleep 30
@@ -138,6 +148,10 @@ jobs:
 
       - name: Publish pglite-rs
         run: |
+          ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if cargo search pglite-rs 2>/dev/null | grep -q "^pglite-rs = \"$ver\""; then
+            echo "pglite-rs $ver already on crates.io, skipping"; exit 0
+          fi
           for i in $(seq 1 10); do
             cargo publish -p pglite-rs --no-verify && break
             sleep 30
