@@ -225,6 +225,36 @@ fn replica_end_to_end() {
 }
 
 #[test]
+fn introspect_not_null_representation() {
+    let db = block_on(PGlite::open_temp()).unwrap();
+    block_on(db.query(
+        "CREATE TABLE nn (id int PRIMARY KEY, req text NOT NULL, opt text)",
+        &[],
+    ))
+    .unwrap();
+    let rows = block_on(db.query(
+        "SELECT a.attname::text, a.attnotnull::text, a.attnotnull::int::text \
+         FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid \
+         WHERE c.relname = 'nn' AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum",
+        &[],
+    ))
+    .unwrap();
+    let col = |name: &str, idx: usize| {
+        rows.iter()
+            .find(|r| r.get::<&str>(0).unwrap() == name)
+            .unwrap()
+            .get::<&str>(idx)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(col("req", 1), "true");
+    assert_eq!(col("req", 2), "1");
+    assert_eq!(col("opt", 2), "0");
+    block_on(db.close()).unwrap();
+}
+
+#[test]
 fn replica_models_published_shape() {
     let Ok(host) = std::env::var("PGLITE_REPLICA_UPSTREAM_HOST") else {
         eprintln!("skipping replica shape test: PGLITE_REPLICA_UPSTREAM_HOST not set");
@@ -292,6 +322,19 @@ fn replica_models_published_shape() {
     assert_eq!(rows[0].get::<i32>(1).unwrap(), 10);
     assert!(block_on(db.query("SELECT g FROM shape", &[])).is_err());
     assert!(block_on(db.query("SELECT secret FROM shape", &[])).is_err());
+
+    let nn = block_on(db.query(
+        "SELECT a.attnotnull::int::text FROM pg_attribute a \
+         JOIN pg_class c ON c.oid = a.attrelid \
+         WHERE c.relname = 'shape' AND a.attname = 'a'",
+        &[],
+    ))
+    .unwrap();
+    assert_eq!(
+        nn[0].get::<&str>(0).unwrap(),
+        "1",
+        "NOT NULL must be preserved on the replica column"
+    );
 
     let events = replica.subscribe();
     up.execute(

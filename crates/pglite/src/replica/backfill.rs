@@ -97,7 +97,7 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
     let col_filter = published_columns_filter(snap.server_version_num()?);
     let cols = snap.simple_query(&format!(
         "SELECT pt.schemaname::text, pt.tablename::text, a.attname::text, \
-                format_type(a.atttypid, a.atttypmod), a.attnotnull::text, a.atttypid::text, \
+                format_type(a.atttypid, a.atttypmod), a.attnotnull::int, a.atttypid::text, \
                 c.relreplident::text \
          FROM pg_publication_tables pt \
          JOIN pg_namespace n ON n.nspname = pt.schemaname \
@@ -141,7 +141,7 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
             name: get(2)?.to_string(),
             type_sql: get(3)?.to_string(),
             type_oid,
-            not_null: get(4)? == "t",
+            not_null: get(4)? == "1",
         });
     }
 
