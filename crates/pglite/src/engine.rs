@@ -63,6 +63,7 @@ pub(crate) struct Engine {
     options: PGliteOptions,
     boot_strings: Vec<CString>,
     boot_argv: Vec<*mut c_char>,
+    saved_cwd: Option<PathBuf>,
 }
 
 impl Engine {
@@ -85,6 +86,7 @@ impl Engine {
                     options,
                     boot_strings: Vec::new(),
                     boot_argv: Vec::new(),
+                    saved_cwd: std::env::current_dir().ok(),
                 };
                 match engine.boot() {
                     Ok(()) => {
@@ -153,6 +155,13 @@ impl Engine {
                         pglite_sys::pgl_setPGliteActive(0);
                         pglite_sys::pgl_run_atexit_funcs();
                         pglite_sys::pgl_native_reset();
+                    }
+                    let restored = self
+                        .saved_cwd
+                        .as_ref()
+                        .is_some_and(|d| std::env::set_current_dir(d).is_ok());
+                    if !restored {
+                        let _ = std::env::set_current_dir(std::env::temp_dir());
                     }
                     let _ = reply.send(());
                     return;
