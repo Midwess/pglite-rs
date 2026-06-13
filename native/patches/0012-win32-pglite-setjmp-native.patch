@@ -1,0 +1,26 @@
+--- a/src/include/c.h
++++ b/src/include/c.h
+@@ -1355,7 +1355,22 @@
+  * so on that toolchain we cheat and use gcc's builtins.
+  */
+ #ifdef WIN32
+-#ifdef __MINGW64__
++#if defined(__PGLITE__)
++/*
++ * PGlite intercepts the top-level error siglongjmp in pglitec.c and turns it
++ * into a trampoline exit, which is frame-safe across the pump-and-return
++ * boundary (the engine runs one main-loop iteration per call). gcc's
++ * __builtin_setjmp/__builtin_longjmp bypass that interception (and would
++ * longjmp into a frame that has already returned), so on Windows PGlite uses
++ * real setjmp plus the pgl_siglongjmp shim, with sigjmp_buf unified to the
++ * CRT jmp_buf so postgresmain_sigjmp_buf has one size across translation units.
++ */
++#include <setjmp.h>
++extern void pgl_siglongjmp(jmp_buf env, int val);
++#define sigjmp_buf jmp_buf
++#define sigsetjmp(x,y) setjmp(x)
++#define siglongjmp pgl_siglongjmp
++#elif defined(__MINGW64__)
+ typedef intptr_t sigjmp_buf[5];
+ #define sigsetjmp(x,y) __builtin_setjmp(x)
+ #define siglongjmp __builtin_longjmp
