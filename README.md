@@ -35,7 +35,7 @@ The crate is runtime-agnostic. It depends on `futures`, not on `tokio`, `smol`, 
 
 ## Memory footprint
 
-Because the engine runs as one in-process backend — no separate server, no postmaster, and with parallel/background workers disabled — its memory use is a small fraction of a standalone PostgreSQL server. And because it is compiled to a native static library rather than WebAssembly, you get native execution speed with none of the WASM memory tax: no linear-memory heap that can only grow, no `initdb` bootstrap stranded inside the module for the life of the process, and memory that is actually returned to the OS.
+Because the engine runs as one in-process backend — no separate server, no postmaster, and with parallel/background workers disabled — its memory use is a small fraction of a standalone PostgreSQL server. It is compiled to a native static library, so you get native execution speed and memory that is actually returned to the OS.
 
 The numbers below are measured, not estimated — each example program in [`examples`](examples) runs the same workload (open, `CREATE TABLE`, insert, query, transaction rollback) under `/usr/bin/time -l` with RSS sampled every 50 ms on macOS (Apple Silicon, release build):
 
@@ -44,14 +44,7 @@ The numbers below are measured, not estimated — each example program in [`exam
 | Single in-process backend (`open_temp`) | **~34 MB** | ~48 MB |
 | Multi-process pool, 4 live connections (`open_multi_process`) | ~101 MB across 15 processes¹ | ~101 MB |
 
-For comparison, the WebAssembly build of PGlite (`@electric-sql/pglite` 0.5.2) running the identical workload:
-
-| Host | Steady-state RSS | Peak RSS (during init) |
-| --- | --- | --- |
-| Node 25 | ~490–510 MB | ~1.6 GB |
-| Chrome renderer | ~710 MB | ~1.15 GB |
-
-That is roughly a **15–20× smaller steady-state footprint** for the same database, with native query speed and a multi-connection mode the WASM build cannot offer. A single embedded backend adds little to your process beyond Postgres's own shared buffers; the shared memory is emulated on the heap and released when the engine closes, and there are no idle worker processes sitting resident. That makes it practical to embed in CLIs, desktop apps, tests, and edge/serverless workloads where both a full Postgres server and a 700 MB WASM instance would be far too heavy.
+A single embedded backend adds little to your process beyond Postgres's own shared buffers; the shared memory is emulated on the heap and released when the engine closes, and there are no idle worker processes sitting resident. That makes it practical to embed in CLIs, desktop apps, tests, and edge/serverless workloads where a full Postgres server would be too heavy.
 
 ¹ Summed RSS over the whole Postgres process tree; this over-counts because every backend maps the same shared-buffers segment, so the true physical footprint is lower. The single in-process number is near-exact.
 
