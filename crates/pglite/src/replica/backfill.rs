@@ -629,6 +629,39 @@ fn topo_order(items: Vec<(u32, Vec<u32>, TypeDef)>) -> Result<Vec<TypeDef>, Erro
     Ok(order.into_iter().map(|i| defs[i].take().unwrap()).collect())
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum SchemaChange {
+    Additive(usize),
+    Incompatible(String),
+}
+
+pub(crate) fn classify_schema_change(expected_line: &str, new: &[(&str, u32)]) -> SchemaChange {
+    let old: Vec<(&str, u32)> = expected_line
+        .split('|')
+        .skip(2)
+        .filter_map(|seg| {
+            let (name, oid) = seg.rsplit_once(':')?;
+            Some((name, oid.parse().ok()?))
+        })
+        .collect();
+    if new.len() < old.len() {
+        return SchemaChange::Incompatible(format!(
+            "a column was removed (had {}, now {})",
+            old.len(),
+            new.len()
+        ));
+    }
+    for (i, (old_name, old_oid)) in old.iter().enumerate() {
+        let (new_name, new_oid) = new[i];
+        if old_name != &new_name || old_oid != &new_oid {
+            return SchemaChange::Incompatible(format!(
+                "column {i} changed (was {old_name}:{old_oid}, now {new_name}:{new_oid})"
+            ));
+        }
+    }
+    SchemaChange::Additive(old.len())
+}
+
 fn create_table_sql(t: &TableDef) -> String {
     let target = format!("{}.{}", ident(&t.schema), ident(&t.name));
     let mut defs: Vec<String> = t
@@ -771,6 +804,34 @@ mod tests {
             row_filter: None,
             indexes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn classify_schema_change_additive() {
+        assert_eq!(
+            classify_schema_change("public|t|id:23", &[("id", 23), ("extra", 25)]),
+            SchemaChange::Additive(1)
+        );
+        assert_eq!(
+            classify_schema_change("public|t|id:23|name:25", &[("id", 23), ("name", 25)]),
+            SchemaChange::Additive(2)
+        );
+    }
+
+    #[test]
+    fn classify_schema_change_incompatible() {
+        assert!(matches!(
+            classify_schema_change("public|t|id:23|x:25", &[("id", 23)]),
+            SchemaChange::Incompatible(_)
+        ));
+        assert!(matches!(
+            classify_schema_change("public|t|id:23", &[("id", 1700)]),
+            SchemaChange::Incompatible(_)
+        ));
+        assert!(matches!(
+            classify_schema_change("public|t|a:23|b:25", &[("b", 25), ("a", 23)]),
+            SchemaChange::Incompatible(_)
+        ));
     }
 
     #[test]

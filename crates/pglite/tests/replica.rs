@@ -47,9 +47,22 @@ fn replica_end_to_end() {
     );
     up.batch_execute(
         "DROP TABLE IF EXISTS public.repl_todos;
+         DROP TABLE IF EXISTS public.repl_typed;
+         DROP TABLE IF EXISTS public.repl_nopk;
+         DROP TYPE IF EXISTS public.repl_addr CASCADE;
+         DROP TYPE IF EXISTS public.repl_num CASCADE;
+         DROP DOMAIN IF EXISTS public.repl_pos CASCADE;
          CREATE TABLE public.repl_todos (id int PRIMARY KEY, title text);
          INSERT INTO public.repl_todos VALUES (1, 'one'), (2, 'two');
-         CREATE PUBLICATION pglite_test_pub FOR TABLE public.repl_todos;",
+         CREATE TYPE public.repl_addr AS (street text, zip int);
+         CREATE DOMAIN public.repl_pos AS int CHECK (VALUE > 0);
+         CREATE TYPE public.repl_num AS RANGE (subtype = numeric);
+         CREATE TABLE public.repl_typed (id int PRIMARY KEY, home public.repl_addr, qty public.repl_pos, span public.repl_num);
+         INSERT INTO public.repl_typed VALUES (1, ROW('Main St', 90210), 5, public.repl_num(1, 9));
+         CREATE TABLE public.repl_nopk (a int, b text);
+         ALTER TABLE public.repl_nopk REPLICA IDENTITY FULL;
+         INSERT INTO public.repl_nopk VALUES (1, 'x'), (2, 'y');
+         CREATE PUBLICATION pglite_test_pub FOR TABLE public.repl_todos, public.repl_typed, public.repl_nopk;",
     )
     .unwrap();
 
@@ -75,6 +88,18 @@ fn replica_end_to_end() {
     assert_eq!(rows[1].get::<&str>(1).unwrap(), "two");
     let backfill_watermark = replica.watermark();
     assert!(backfill_watermark.0 > 0);
+
+    let typed = block_on(db.query(
+        "SELECT id, (home).zip, qty, lower(span)::text FROM repl_typed ORDER BY id",
+        &[],
+    ))
+    .unwrap();
+    assert_eq!(typed.len(), 1);
+    assert_eq!(typed[0].get::<i32>(1).unwrap(), 90210);
+    assert_eq!(typed[0].get::<i32>(2).unwrap(), 5);
+    assert_eq!(typed[0].get::<&str>(3).unwrap(), "1");
+    let nopk = block_on(db.query("SELECT count(*) FROM repl_nopk", &[])).unwrap();
+    assert_eq!(nopk[0].get::<i64>(0).unwrap(), 2);
 
     let events = replica.subscribe();
     up.execute("INSERT INTO public.repl_todos VALUES (3, 'three')", &[])
@@ -134,14 +159,19 @@ fn replica_end_to_end() {
     up.execute("INSERT INTO public.repl_todos VALUES (5, 'five', 'x')", &[])
         .unwrap();
 
-    assert!(wait_until(Duration::from_secs(30), || replica2.is_halted()));
-    let reason = replica2.halt_reason().unwrap_or_default();
-    assert!(reason.contains("repl_todos"), "halt reason: {reason}");
-    assert!(wait_until(Duration::from_secs(10), || replica2.is_stopped()));
+    let added = events2.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert!(matches!(added.changes[0], RowChange::Insert { .. }));
+    assert!(!replica2.is_halted());
 
-    let rows = block_on(db.query("SELECT id FROM repl_todos ORDER BY id", &[])).unwrap();
+    let rows = block_on(db.query("SELECT id, extra FROM repl_todos ORDER BY id", &[])).unwrap();
     let ids: Vec<i32> = rows.iter().map(|r| r.get::<i32>(0).unwrap()).collect();
-    assert_eq!(ids, vec![1, 3, 4]);
+    assert_eq!(ids, vec![1, 3, 4, 5]);
+    let row5 = rows.iter().find(|r| r.get::<i32>(0).unwrap() == 5).unwrap();
+    assert_eq!(row5.get::<&str>(1).unwrap(), "x");
+
+    replica2.stop();
+    assert!(wait_until(Duration::from_secs(10), || replica2.is_stopped()));
+    assert!(!replica2.is_halted());
 
     block_on(Replica::decommission(&db, &config)).unwrap();
     let slots = up
@@ -218,7 +248,14 @@ fn replica_end_to_end() {
 
     block_on(Replica::decommission(&db, &config)).unwrap();
     let _ = up.batch_execute(
-        "DROP PUBLICATION IF EXISTS pglite_test_pub; DROP TABLE IF EXISTS public.repl_todos; DROP TABLE IF EXISTS public.side;",
+        "DROP PUBLICATION IF EXISTS pglite_test_pub; \
+         DROP TABLE IF EXISTS public.repl_todos; \
+         DROP TABLE IF EXISTS public.repl_typed; \
+         DROP TABLE IF EXISTS public.repl_nopk; \
+         DROP TABLE IF EXISTS public.side; \
+         DROP TYPE IF EXISTS public.repl_addr CASCADE; \
+         DROP TYPE IF EXISTS public.repl_num CASCADE; \
+         DROP DOMAIN IF EXISTS public.repl_pos CASCADE;",
     );
 
     block_on(db.close()).unwrap();

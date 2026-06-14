@@ -736,12 +736,40 @@ impl Replica {
                             &name,
                             columns.iter().map(|c| (c.name.as_str(), c.type_oid)),
                         );
-                        match expected.get(&(namespace.clone(), name.clone())) {
-                            Some(want) if *want == line => {}
+                        let known = expected.get(&(namespace.clone(), name.clone())).cloned();
+                        match known {
+                            Some(want) if want == line => {}
                             Some(want) => {
-                                return Err(Error::ReplicaHalted(format!(
-                                    "schema drift on {namespace}.{name}: expected [{want}], got [{line}]"
-                                )))
+                                let new_cols: Vec<(&str, u32)> = columns
+                                    .iter()
+                                    .map(|c| (c.name.as_str(), c.type_oid))
+                                    .collect();
+                                match backfill::classify_schema_change(&want, &new_cols) {
+                                    backfill::SchemaChange::Additive(old_count) => {
+                                        self.apply_added_columns(
+                                            &namespace,
+                                            &name,
+                                            &columns[old_count..],
+                                        )?;
+                                        expected.insert(
+                                            (namespace.clone(), name.clone()),
+                                            line.clone(),
+                                        );
+                                        let mut lines: Vec<String> =
+                                            expected.values().cloned().collect();
+                                        lines.sort();
+                                        block_on(meta::update_fingerprint(
+                                            &self.db,
+                                            &lines.join("\n"),
+                                        ))?;
+                                    }
+                                    backfill::SchemaChange::Incompatible(reason) => {
+                                        return Err(Error::ReplicaHalted(format!(
+                                            "incompatible schema change on {namespace}.{name}: {reason}; \
+                                             run Replica::decommission and start again for a full resync"
+                                        )))
+                                    }
+                                }
                             }
                             None => {
                                 return Err(Error::ReplicaHalted(format!(
@@ -844,6 +872,42 @@ impl Replica {
     fn open_txn(txn: &mut Option<TxnBuf>) -> Result<&mut TxnBuf, Error> {
         txn.as_mut()
             .ok_or_else(|| Error::Protocol("change outside of transaction".into()))
+    }
+
+    fn apply_added_columns(
+        &self,
+        schema: &str,
+        table: &str,
+        added: &[RelColumn],
+    ) -> Result<(), Error> {
+        if added.is_empty() {
+            return Ok(());
+        }
+        let mut conn = ReplConn::connect_and_auth(&self.config, false)?;
+        let target = format!("{}.{}", ident(schema), ident(table));
+        let result = (|| {
+            for col in added {
+                let rows = conn.simple_query(&format!(
+                    "SELECT format_type({}, {})",
+                    col.type_oid, col.type_modifier
+                ))?;
+                let type_sql = rows
+                    .first()
+                    .and_then(|r| r.first())
+                    .and_then(|v| v.as_deref())
+                    .ok_or_else(|| Error::Protocol("format_type returned no row".into()))?;
+                block_on(self.db.query(
+                    &format!(
+                        "ALTER TABLE {target} ADD COLUMN IF NOT EXISTS {} {type_sql}",
+                        ident(&col.name)
+                    ),
+                    &[],
+                ))?;
+            }
+            Ok(())
+        })();
+        conn.terminate();
+        result
     }
 
     fn apply(&self, stmts: &[String], end: Lsn) -> Result<(), Error> {

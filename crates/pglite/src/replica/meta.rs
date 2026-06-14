@@ -92,6 +92,15 @@ pub(crate) async fn init_state(
     Ok(())
 }
 
+pub(crate) async fn update_fingerprint(db: &PGlite, fingerprint: &str) -> Result<(), Error> {
+    db.query(
+        "UPDATE _pglite_replica SET fingerprint = $1, updated_at = now() WHERE id = 1",
+        &[&fingerprint],
+    )
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::Lsn;
