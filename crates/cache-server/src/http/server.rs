@@ -12,6 +12,7 @@ pub async fn serve(state: AppState, bind: String) -> Result<(), CacheError> {
             .route("/query", web::post().to(super::query::query))
             .route("/q/{hash}/{version}", web::get().to(super::query::cursor))
             .route("/shape/{table}", web::get().to(super::shape::shape))
+            .route("/live", web::get().to(super::live::live))
     })
     .bind(bind)
     .map_err(CacheError::Io)?

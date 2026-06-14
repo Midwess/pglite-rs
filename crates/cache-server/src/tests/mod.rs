@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use pglite::{CommittedTransaction, Lsn, RowChange};
 
+use serde_json::json;
+
 use crate::classify::{Plan, ReadClassifier};
+use crate::diff::{diff, keyed_map, Delta};
 use crate::shapelog::ShapeLog;
 use crate::version::VersionIndex;
 
@@ -254,4 +257,45 @@ fn shape_log_eviction_signals_refetch() {
     }
     assert!(log.range("users", 5).must_refetch);
     assert!(!log.range("users", 1050).must_refetch);
+}
+
+#[test]
+fn diff_detects_insert_update_delete() {
+    let mut prev = HashMap::new();
+    prev.insert("1".to_string(), json!({"id": 1, "name": "a"}));
+    prev.insert("9".to_string(), json!({"id": 9}));
+    let mut next = HashMap::new();
+    next.insert("1".to_string(), json!({"id": 1, "name": "b"}));
+    next.insert("2".to_string(), json!({"id": 2}));
+
+    let (mut inserts, mut updates, mut deletes) = (0, 0, 0);
+    for delta in diff(&prev, &next) {
+        match delta {
+            Delta::Insert { .. } => inserts += 1,
+            Delta::Update { .. } => updates += 1,
+            Delta::Delete { .. } => deletes += 1,
+        }
+    }
+    assert_eq!((inserts, updates, deletes), (1, 1, 1));
+}
+
+#[test]
+fn diff_ignores_unchanged_rows() {
+    let mut prev = HashMap::new();
+    prev.insert("1".to_string(), json!({"id": 1}));
+    let next = prev.clone();
+    assert!(diff(&prev, &next).is_empty());
+}
+
+#[test]
+fn keyed_map_uses_pk_column() {
+    let map = keyed_map(r#"[{"id":1,"n":"a"},{"id":2,"n":"b"}]"#, Some("id"));
+    assert!(map.contains_key("1"));
+    assert!(map.contains_key("2"));
+}
+
+#[test]
+fn keyed_map_falls_back_to_row_hash() {
+    let map = keyed_map(r#"[{"a":1},{"a":2}]"#, None);
+    assert_eq!(map.len(), 2);
 }

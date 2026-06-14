@@ -8,6 +8,7 @@ use crate::cache::QueryCache;
 use crate::cdc::CdcBridge;
 use crate::classify::ReadClassifier;
 use crate::error::CacheError;
+use crate::live::LiveHub;
 use crate::shapelog::ShapeLog;
 use crate::upstream::Upstream;
 use crate::version::VersionIndex;
@@ -61,6 +62,7 @@ pub(crate) struct AppState {
     pub classifier: Arc<ReadClassifier>,
     pub upstream: Arc<Upstream>,
     pub shapes: ShapeLog,
+    pub live: LiveHub,
     pub tables: Arc<HashSet<String>>,
 }
 
@@ -92,9 +94,10 @@ impl CacheServer {
         let replica = Replica::start(db.clone(), replica_config).await?;
 
         let (replicated, pk, full) = scan_schema(&db).await?;
-        let versions = VersionIndex::new(pk, full);
+        let versions = VersionIndex::new(pk.clone(), full);
         let cdc = CdcBridge::start(&replica, versions.clone())?;
         let shapes = ShapeLog::start(&cdc);
+        let live = LiveHub::start(&cdc, db.clone(), Arc::new(pk));
         let cache = QueryCache::new(config.cache_size_bytes);
         let classifier = Arc::new(ReadClassifier::new(replicated.clone()));
         let tables = Arc::new(replicated);
@@ -114,6 +117,7 @@ impl CacheServer {
             classifier,
             upstream,
             shapes,
+            live,
             tables,
         };
 
