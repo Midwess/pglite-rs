@@ -325,6 +325,49 @@ fn oid_array(oids: impl Iterator<Item = u32>) -> String {
     )
 }
 
+pub(crate) fn check_extension_types(snap: &mut ReplConn, tables: &[TableDef]) -> Result<(), Error> {
+    let mut oids: Vec<u32> = Vec::new();
+    for t in tables {
+        for c in &t.columns {
+            if !oids.contains(&c.type_oid) {
+                oids.push(c.type_oid);
+            }
+        }
+    }
+    if oids.is_empty() {
+        return Ok(());
+    }
+    let rows = snap.simple_query(&format!(
+        "SELECT a.col_oid::text, n.nspname::text, t.typname::text, e.extname::text \
+         FROM (SELECT unnest({}) AS col_oid) a \
+         JOIN pg_type base ON base.oid = a.col_oid \
+         JOIN pg_type t ON t.oid = CASE WHEN base.typtype = 'b' AND base.typelem <> 0 \
+                                        THEN base.typelem ELSE base.oid END \
+         JOIN pg_depend d ON d.objid = t.oid AND d.classid = 'pg_type'::regclass AND d.deptype = 'e' \
+         JOIN pg_extension e ON e.oid = d.refobjid \
+         JOIN pg_namespace n ON n.oid = t.typnamespace",
+        oid_array(oids.iter().copied())
+    ))?;
+    let Some(row) = rows.first() else {
+        return Ok(());
+    };
+    let cell = |i: usize| row.get(i).and_then(|v| v.as_deref()).unwrap_or_default();
+    let col_oid: u32 = cell(0).parse().unwrap_or(0);
+    let location = tables
+        .iter()
+        .flat_map(|t| t.columns.iter().map(move |c| (t, c)))
+        .find(|(_, c)| c.type_oid == col_oid)
+        .map(|(t, c)| format!("{}.{}.{}", t.schema, t.name, c.name))
+        .unwrap_or_else(|| "a published column".to_string());
+    Err(Error::ReplicaConfig(format!(
+        "column {location} uses type {}.{} from extension '{}', which pglite does not provide; \
+         exclude the table from the publication or remove the column",
+        cell(1),
+        cell(2),
+        cell(3)
+    )))
+}
+
 pub(crate) fn introspect_types(
     snap: &mut ReplConn,
     publication: &str,
