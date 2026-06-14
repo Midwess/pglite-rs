@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pglite::{MultiProcessOptions, PGlite, Replica, ReplicaConfig, SslMode};
+use tokio::sync::OnceCell;
 
 use crate::cache::QueryCache;
 use crate::cdc::CdcBridge;
@@ -10,8 +11,9 @@ use crate::classify::ReadClassifier;
 use crate::error::CacheError;
 use crate::live::LiveHub;
 use crate::shapelog::ShapeLog;
-use crate::upstream::Upstream;
 use crate::version::VersionIndex;
+
+static INSTANCE: OnceCell<Di> = OnceCell::const_new();
 
 pub struct UpstreamConfig {
     pub host: String,
@@ -53,27 +55,22 @@ impl ServerConfig {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct AppState {
-    pub db: PGlite,
-    pub replica: Replica,
-    pub versions: VersionIndex,
-    pub cache: QueryCache,
-    pub classifier: Arc<ReadClassifier>,
-    pub upstream: Arc<Upstream>,
-    pub shapes: ShapeLog,
-    pub live: LiveHub,
-    pub tables: Arc<HashSet<String>>,
-}
-
-pub struct CacheServer {
-    state: AppState,
+pub struct Di {
+    db: PGlite,
+    replica: Replica,
+    versions: VersionIndex,
+    cache: QueryCache,
+    classifier: ReadClassifier,
+    shapes: ShapeLog,
+    live: LiveHub,
+    tables: HashSet<String>,
+    bind_addr: String,
+    #[allow(dead_code)]
     cdc: CdcBridge,
-    bind: String,
 }
 
-impl CacheServer {
-    pub async fn boot(config: ServerConfig) -> Result<CacheServer, CacheError> {
+impl Di {
+    pub async fn init(config: ServerConfig) -> Result<(), CacheError> {
         let options = MultiProcessOptions {
             max_connections: config.max_connections,
             ..Default::default()
@@ -99,40 +96,64 @@ impl CacheServer {
         let shapes = ShapeLog::start(&cdc);
         let live = LiveHub::start(&cdc, db.clone(), Arc::new(pk));
         let cache = QueryCache::new(config.cache_size_bytes);
-        let classifier = Arc::new(ReadClassifier::new(replicated.clone()));
-        let tables = Arc::new(replicated);
-        let upstream = Arc::new(Upstream::new(
-            &config.upstream.host,
-            config.upstream.port,
-            &config.upstream.user,
-            &config.upstream.password,
-            &config.upstream.database,
-        ));
+        let classifier = ReadClassifier::new(replicated.clone());
 
-        let state = AppState {
+        let di = Di {
             db,
             replica,
             versions,
             cache,
             classifier,
-            upstream,
             shapes,
             live,
-            tables,
+            tables: replicated,
+            bind_addr: config.bind_addr,
+            cdc,
         };
 
-        Ok(CacheServer {
-            state,
-            cdc,
-            bind: config.bind_addr,
-        })
+        INSTANCE
+            .set(di)
+            .map_err(|_| CacheError::Config("dependencies already initialized".to_string()))
     }
 
-    pub async fn run(self) -> Result<(), CacheError> {
-        let CacheServer { state, cdc, bind } = self;
-        let result = crate::http::server::serve(state, bind).await;
-        cdc.stop();
-        result
+    pub fn instance() -> &'static Di {
+        INSTANCE.get().expect("dependencies not initialized")
+    }
+
+    pub fn db(&self) -> &PGlite {
+        &self.db
+    }
+
+    pub fn replica(&self) -> &Replica {
+        &self.replica
+    }
+
+    pub fn versions(&self) -> &VersionIndex {
+        &self.versions
+    }
+
+    pub fn cache(&self) -> &QueryCache {
+        &self.cache
+    }
+
+    pub fn classifier(&self) -> &ReadClassifier {
+        &self.classifier
+    }
+
+    pub fn shapes(&self) -> &ShapeLog {
+        &self.shapes
+    }
+
+    pub fn live(&self) -> &LiveHub {
+        &self.live
+    }
+
+    pub fn tables(&self) -> &HashSet<String> {
+        &self.tables
+    }
+
+    pub fn bind_addr(&self) -> &str {
+        &self.bind_addr
     }
 }
 

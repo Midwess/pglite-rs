@@ -10,19 +10,11 @@ use sqlparser::parser::Parser;
 
 use crate::error::CacheError;
 
-pub enum Plan {
-    Cacheable {
-        fingerprint: u64,
-        tables: Vec<String>,
-        eq_filters: Vec<(String, String)>,
-        sql: String,
-    },
-    PassThrough {
-        sql: String,
-    },
-    Forward {
-        sql: String,
-    },
+pub struct CacheableQuery {
+    pub fingerprint: u64,
+    pub tables: Vec<String>,
+    pub eq_filters: Vec<(String, String)>,
+    pub sql: String,
 }
 
 const SIDE_EFFECTING: &[&str] = &[
@@ -56,42 +48,41 @@ impl ReadClassifier {
         }
     }
 
-    pub fn classify(&self, sql: &str) -> Result<Plan, CacheError> {
-        let statements = match Parser::parse_sql(&PostgreSqlDialect {}, sql) {
-            Ok(statements) => statements,
-            Err(_) => {
-                return Ok(Plan::Forward {
-                    sql: sql.to_string(),
-                })
-            }
-        };
+    pub fn classify(&self, sql: &str) -> Result<CacheableQuery, CacheError> {
+        let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql).map_err(|_| {
+            CacheError::Rejected(
+                "could not parse as a read-only SELECT; this server caches read queries only"
+                    .to_string(),
+            )
+        })?;
 
         if statements.len() != 1 {
             return Err(CacheError::Rejected(
-                "exactly one statement is supported".to_string(),
+                "only a single SELECT statement is supported".to_string(),
             ));
         }
 
         let statement = &statements[0];
-        let query = match statement {
-            Statement::Query(query) => query,
-            _ => {
-                return Ok(Plan::Forward {
-                    sql: sql.to_string(),
-                })
-            }
-        };
+        let query =
+            match statement {
+                Statement::Query(query) => query,
+                _ => return Err(CacheError::Rejected(
+                    "only read-only SELECT queries are cacheable; writes and DDL are not supported"
+                        .to_string(),
+                )),
+            };
 
         if !query.locks.is_empty() {
-            return Ok(Plan::Forward {
-                sql: sql.to_string(),
-            });
+            return Err(CacheError::Rejected(
+                "locking reads (FOR UPDATE / FOR SHARE) are not supported on a read-only cache"
+                    .to_string(),
+            ));
         }
         if let SetExpr::Select(select) = query.body.as_ref() {
             if select.into.is_some() {
-                return Ok(Plan::Forward {
-                    sql: sql.to_string(),
-                });
+                return Err(CacheError::Rejected(
+                    "SELECT INTO is not supported because it writes".to_string(),
+                ));
             }
         }
 
@@ -109,13 +100,21 @@ impl ReadClassifier {
             }
             ControlFlow::<()>::Continue(())
         });
-        if functions
+        if let Some(name) = functions
             .iter()
-            .any(|f| SIDE_EFFECTING.contains(&f.as_str()))
+            .find(|f| SIDE_EFFECTING.contains(&f.as_str()))
         {
-            return Ok(Plan::Forward {
-                sql: sql.to_string(),
-            });
+            return Err(CacheError::Rejected(format!(
+                "function `{name}` has side effects and cannot be cached"
+            )));
+        }
+        if let Some(name) = functions
+            .iter()
+            .find(|f| VOLATILE_READ.contains(&f.as_str()))
+        {
+            return Err(CacheError::Rejected(format!(
+                "non-deterministic function `{name}` cannot be cached or kept realtime"
+            )));
         }
 
         let mut tables = Vec::new();
@@ -129,18 +128,9 @@ impl ReadClassifier {
         for table in &tables {
             if !self.replicated.contains(table) {
                 return Err(CacheError::Rejected(format!(
-                    "table `{table}` is not replicated"
+                    "table `{table}` is not available in this cache (not replicated)"
                 )));
             }
-        }
-
-        if functions
-            .iter()
-            .any(|f| VOLATILE_READ.contains(&f.as_str()))
-        {
-            return Ok(Plan::PassThrough {
-                sql: sql.to_string(),
-            });
         }
 
         let mut eq_filters = Vec::new();
@@ -153,7 +143,7 @@ impl ReadClassifier {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         statement.to_string().hash(&mut hasher);
 
-        Ok(Plan::Cacheable {
+        Ok(CacheableQuery {
             fingerprint: hasher.finish(),
             tables,
             eq_filters,
@@ -162,29 +152,33 @@ impl ReadClassifier {
     }
 }
 
-fn collect_eq_filters(expr: &Expr, out: &mut Vec<(String, String)>) {
-    match expr {
-        Expr::BinaryOp {
-            left,
-            op: BinaryOperator::And,
-            right,
-        } => {
-            collect_eq_filters(left, out);
-            collect_eq_filters(right, out);
-        }
-        Expr::BinaryOp {
-            left,
-            op: BinaryOperator::Eq,
-            right,
-        } => {
-            if let (Some(column), Some(value)) = (ident_name(left), literal_value(right)) {
-                out.push((column, value));
-            } else if let (Some(column), Some(value)) = (ident_name(right), literal_value(left)) {
-                out.push((column, value));
+fn collect_eq_filters(root: &Expr, out: &mut Vec<(String, String)>) {
+    let mut stack = vec![root];
+    while let Some(expr) = stack.pop() {
+        match expr {
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::And,
+                right,
+            } => {
+                stack.push(left.as_ref());
+                stack.push(right.as_ref());
             }
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq,
+                right,
+            } => {
+                if let (Some(column), Some(value)) = (ident_name(left), literal_value(right)) {
+                    out.push((column, value));
+                } else if let (Some(column), Some(value)) = (ident_name(right), literal_value(left))
+                {
+                    out.push((column, value));
+                }
+            }
+            Expr::Nested(inner) => stack.push(inner.as_ref()),
+            _ => {}
         }
-        Expr::Nested(inner) => collect_eq_filters(inner, out),
-        _ => {}
     }
 }
 

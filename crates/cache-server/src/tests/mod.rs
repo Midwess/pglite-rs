@@ -4,7 +4,7 @@ use pglite::{CommittedTransaction, Lsn, RowChange};
 
 use serde_json::json;
 
-use crate::classify::{Plan, ReadClassifier};
+use crate::classify::ReadClassifier;
 use crate::diff::{diff, keyed_map, Delta};
 use crate::shapelog::ShapeLog;
 use crate::version::VersionIndex;
@@ -18,13 +18,10 @@ fn classifier() -> ReadClassifier {
 
 #[test]
 fn pure_select_over_replicated_table_is_cacheable() {
-    match classifier()
+    let query = classifier()
         .classify("select * from users where id = 1")
-        .unwrap()
-    {
-        Plan::Cacheable { tables, .. } => assert!(tables.contains(&"users".to_string())),
-        _ => panic!("expected cacheable"),
-    }
+        .unwrap();
+    assert!(query.tables.contains(&"users".to_string()));
 }
 
 #[test]
@@ -33,31 +30,22 @@ fn select_over_non_replicated_table_is_rejected() {
 }
 
 #[test]
-fn insert_is_forwarded() {
-    assert!(matches!(
-        classifier()
-            .classify("insert into users (id) values (1)")
-            .unwrap(),
-        Plan::Forward { .. }
-    ));
+fn insert_is_rejected() {
+    assert!(classifier()
+        .classify("insert into users (id) values (1)")
+        .is_err());
 }
 
 #[test]
-fn select_for_update_is_forwarded() {
-    assert!(matches!(
-        classifier()
-            .classify("select * from users where id = 1 for update")
-            .unwrap(),
-        Plan::Forward { .. }
-    ));
+fn select_for_update_is_rejected() {
+    assert!(classifier()
+        .classify("select * from users where id = 1 for update")
+        .is_err());
 }
 
 #[test]
-fn volatile_function_passes_through_uncached() {
-    assert!(matches!(
-        classifier().classify("select now()").unwrap(),
-        Plan::PassThrough { .. }
-    ));
+fn volatile_function_is_rejected() {
+    assert!(classifier().classify("select now() from users").is_err());
 }
 
 #[test]
@@ -69,15 +57,12 @@ fn multi_statement_is_rejected() {
 
 #[test]
 fn equality_filter_is_extracted_for_cacheable() {
-    match classifier()
+    let query = classifier()
         .classify("select * from users where id = 7")
-        .unwrap()
-    {
-        Plan::Cacheable { eq_filters, .. } => {
-            assert!(eq_filters.contains(&("id".to_string(), "7".to_string())))
-        }
-        _ => panic!("expected cacheable"),
-    }
+        .unwrap();
+    assert!(query
+        .eq_filters
+        .contains(&("id".to_string(), "7".to_string())));
 }
 
 fn users_versions() -> VersionIndex {

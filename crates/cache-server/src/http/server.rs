@@ -1,13 +1,12 @@
 use actix_web::{web, App, HttpServer};
 
-use crate::api::AppState;
+use crate::di::Di;
 use crate::error::CacheError;
 
-pub async fn serve(state: AppState, bind: String) -> Result<(), CacheError> {
-    let data = web::Data::new(state);
-    HttpServer::new(move || {
+pub async fn serve() -> Result<(), CacheError> {
+    let bind = Di::instance().bind_addr().to_string();
+    HttpServer::new(|| {
         App::new()
-            .app_data(data.clone())
             .route("/healthz", web::get().to(super::health::healthz))
             .route("/query", web::post().to(super::query::query))
             .route("/q/{hash}/{version}", web::get().to(super::query::cursor))

@@ -4,7 +4,7 @@ use actix_web::{web, HttpResponse};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::api::AppState;
+use crate::di::Di;
 use crate::rows;
 
 #[derive(Deserialize)]
@@ -13,33 +13,31 @@ pub struct ShapeQuery {
     live: Option<bool>,
 }
 
-pub async fn shape(
-    state: web::Data<AppState>,
-    path: web::Path<String>,
-    query: web::Query<ShapeQuery>,
-) -> HttpResponse {
+pub async fn shape(path: web::Path<String>, query: web::Query<ShapeQuery>) -> HttpResponse {
     let table = path.into_inner();
-    if !state.tables.contains(&table) {
+    let di = Di::instance();
+    if !di.tables().contains(&table) {
         return HttpResponse::NotFound()
             .content_type("application/json")
             .body("{\"name\":\"NotFound\",\"message\":\"unknown shape\"}");
     }
-    if state.replica.is_halted() {
+    if di.replica().is_halted() {
         return HttpResponse::ServiceUnavailable().json(json!({
             "status": "halted",
-            "reason": state.replica.halt_reason(),
+            "reason": di.replica().halt_reason(),
         }));
     }
 
     match query.offset {
-        None | Some(..=-1) => snapshot(&state, &table).await,
-        Some(offset) => tail(&state, &table, offset as u64, query.live.unwrap_or(false)).await,
+        None | Some(..=-1) => snapshot(&table).await,
+        Some(offset) => tail(&table, offset as u64, query.live.unwrap_or(false)).await,
     }
 }
 
-async fn snapshot(state: &AppState, table: &str) -> HttpResponse {
-    let offset = state.replica.watermark().0;
-    match rows::query_json(&state.db, &format!("select * from \"{table}\"")).await {
+async fn snapshot(table: &str) -> HttpResponse {
+    let di = Di::instance();
+    let offset = di.replica().watermark().0;
+    match rows::query_json(di.db(), &format!("select * from \"{table}\"")).await {
         Ok(data) => {
             let snapshot: Value = serde_json::from_str(&data).unwrap_or_else(|_| json!([]));
             HttpResponse::Ok()
@@ -58,11 +56,12 @@ async fn snapshot(state: &AppState, table: &str) -> HttpResponse {
     }
 }
 
-async fn tail(state: &AppState, table: &str, after: u64, live: bool) -> HttpResponse {
-    let mut range = state.shapes.range(table, after);
+async fn tail(table: &str, after: u64, live: bool) -> HttpResponse {
+    let shapes = Di::instance().shapes();
+    let mut range = shapes.range(table, after);
     if live && range.changes.is_empty() && !range.must_refetch {
-        let _ = tokio::time::timeout(Duration::from_secs(20), state.shapes.wait_for_change()).await;
-        range = state.shapes.range(table, after);
+        let _ = tokio::time::timeout(Duration::from_secs(20), shapes.wait_for_change()).await;
+        range = shapes.range(table, after);
     }
 
     if range.must_refetch {

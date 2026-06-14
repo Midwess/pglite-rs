@@ -1,9 +1,7 @@
-use cache_server::{CacheServer, ServerConfig};
+use cache_server::ServerConfig;
 
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ServerConfig::from_env()?;
-    let server = CacheServer::boot(config).await?;
-    server.run().await?;
+    cache_server::run(ServerConfig::from_env()?).await?;
     Ok(())
 }

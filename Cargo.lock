@@ -354,7 +354,6 @@ dependencies = [
  "sqlparser",
  "thiserror",
  "tokio",
- "tokio-postgres",
  "tokio-stream",
 ]
 
