@@ -23,6 +23,12 @@ pub(crate) struct TableDef {
     pub indexes: Vec<String>,
 }
 
+pub(crate) struct EnumDef {
+    pub schema: String,
+    pub name: String,
+    pub labels: Vec<String>,
+}
+
 pub(crate) fn fingerprint_line<'a>(
     schema: &str,
     table: &str,
@@ -221,8 +227,70 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
     Ok(tables)
 }
 
-pub(crate) fn bootstrap_schema(db: &PGlite, tables: &[TableDef]) -> Result<(), Error> {
+pub(crate) fn introspect_enums(
+    snap: &mut ReplConn,
+    publication: &str,
+) -> Result<Vec<EnumDef>, Error> {
+    let pub_lit = lit(publication);
+    let rows = snap.simple_query(&format!(
+        "WITH used AS ( \
+           SELECT DISTINCT CASE WHEN col.typtype = 'e' THEN col.oid \
+                                WHEN col.typelem <> 0 THEN col.typelem \
+                                ELSE col.oid END AS type_oid \
+           FROM pg_publication_tables pt \
+           JOIN pg_namespace tn ON tn.nspname = pt.schemaname \
+           JOIN pg_class c ON c.relnamespace = tn.oid AND c.relname = pt.tablename \
+           JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
+           JOIN pg_type col ON col.oid = a.atttypid \
+           WHERE pt.pubname = {pub_lit} \
+         ) \
+         SELECT n.nspname::text, t.typname::text, e.enumlabel::text \
+         FROM used u \
+         JOIN pg_type t ON t.oid = u.type_oid AND t.typtype = 'e' \
+         JOIN pg_enum e ON e.enumtypid = t.oid \
+         JOIN pg_namespace n ON n.oid = t.typnamespace \
+         ORDER BY n.nspname, t.typname, e.enumsortorder"
+    ))?;
+
+    let mut enums: Vec<EnumDef> = Vec::new();
+    for row in &rows {
+        let schema = row.first().and_then(|v| v.as_deref()).unwrap_or_default();
+        let name = row.get(1).and_then(|v| v.as_deref()).unwrap_or_default();
+        let label = row.get(2).and_then(|v| v.as_deref()).unwrap_or_default();
+        if enums
+            .last()
+            .map(|e| e.schema != schema || e.name != name)
+            .unwrap_or(true)
+        {
+            enums.push(EnumDef {
+                schema: schema.to_string(),
+                name: name.to_string(),
+                labels: Vec::new(),
+            });
+        }
+        enums.last_mut().unwrap().labels.push(label.to_string());
+    }
+    Ok(enums)
+}
+
+pub(crate) fn bootstrap_schema(
+    db: &PGlite,
+    enums: &[EnumDef],
+    tables: &[TableDef],
+) -> Result<(), Error> {
     block_on(async {
+        for e in enums {
+            if e.schema != "public" {
+                db.exec(&format!("CREATE SCHEMA IF NOT EXISTS {}", ident(&e.schema)))
+                    .await?;
+            }
+            let target = format!("{}.{}", ident(&e.schema), ident(&e.name));
+            db.exec(&format!("DROP TYPE IF EXISTS {target} CASCADE"))
+                .await?;
+            let labels = e.labels.iter().map(|l| lit(l)).collect::<Vec<_>>().join(", ");
+            db.exec(&format!("CREATE TYPE {target} AS ENUM ({labels})"))
+                .await?;
+        }
         for t in tables {
             if t.schema != "public" {
                 db.exec(&format!("CREATE SCHEMA IF NOT EXISTS {}", ident(&t.schema)))
