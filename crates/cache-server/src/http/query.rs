@@ -60,9 +60,10 @@ async fn run_query(state: &AppState, sql: &str) -> Result<(String, String), Cach
         Plan::Cacheable {
             fingerprint,
             tables,
+            eq_filters,
             sql,
         } => {
-            let version = state.versions.version_of(&tables);
+            let version = state.versions.version_of(&tables, &eq_filters);
             let key = format!("{fingerprint:x}:{}", version.0);
             let db = state.db.clone();
             let result = state

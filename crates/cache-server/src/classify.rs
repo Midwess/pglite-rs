@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::ops::ControlFlow;
 
-use sqlparser::ast::{visit_expressions, visit_relations, Expr, SetExpr, Statement};
+use sqlparser::ast::{
+    visit_expressions, visit_relations, BinaryOperator, Expr, SetExpr, Statement, Value,
+};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 
@@ -12,6 +14,7 @@ pub enum Plan {
     Cacheable {
         fingerprint: u64,
         tables: Vec<String>,
+        eq_filters: Vec<(String, String)>,
         sql: String,
     },
     PassThrough {
@@ -140,14 +143,65 @@ impl ReadClassifier {
             });
         }
 
+        let mut eq_filters = Vec::new();
+        if let SetExpr::Select(select) = query.body.as_ref() {
+            if let Some(selection) = &select.selection {
+                collect_eq_filters(selection, &mut eq_filters);
+            }
+        }
+
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         statement.to_string().hash(&mut hasher);
 
         Ok(Plan::Cacheable {
             fingerprint: hasher.finish(),
             tables,
+            eq_filters,
             sql: sql.to_string(),
         })
+    }
+}
+
+fn collect_eq_filters(expr: &Expr, out: &mut Vec<(String, String)>) {
+    match expr {
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => {
+            collect_eq_filters(left, out);
+            collect_eq_filters(right, out);
+        }
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } => {
+            if let (Some(column), Some(value)) = (ident_name(left), literal_value(right)) {
+                out.push((column, value));
+            } else if let (Some(column), Some(value)) = (ident_name(right), literal_value(left)) {
+                out.push((column, value));
+            }
+        }
+        Expr::Nested(inner) => collect_eq_filters(inner, out),
+        _ => {}
+    }
+}
+
+fn ident_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Identifier(ident) => Some(ident.value.to_ascii_lowercase()),
+        Expr::CompoundIdentifier(parts) => parts.last().map(|part| part.value.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+fn literal_value(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Value(Value::Number(number, _)) => Some(number.clone()),
+        Expr::Value(Value::SingleQuotedString(text)) => Some(text.clone()),
+        Expr::Value(Value::Boolean(flag)) => Some(flag.to_string()),
+        _ => None,
     }
 }
 
