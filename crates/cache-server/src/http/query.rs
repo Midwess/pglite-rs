@@ -1,19 +1,50 @@
+use std::sync::Arc;
+
 use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse};
+use serde::Deserialize;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
 
+use crate::cache::CachedResult;
+use crate::classify::CacheableQuery;
 use crate::di::Di;
 use crate::error::CacheError;
 use crate::rows;
 
-pub async fn query(body: String) -> HttpResponse {
-    match run_query(&body).await {
-        Ok((etag, json)) => HttpResponse::Ok()
-            .insert_header(("ETag", etag))
-            .insert_header(("Cache-Control", "public, max-age=0, must-revalidate"))
-            .content_type("application/json")
-            .body(json),
+#[derive(Deserialize)]
+pub struct QueryParams {
+    live: Option<bool>,
+}
+
+pub async fn query(params: web::Query<QueryParams>, body: String) -> HttpResponse {
+    if params.live.unwrap_or(false) {
+        return live_query(&body).await;
+    }
+    match materialize(&body).await {
+        Ok((_, hash, version, _)) => HttpResponse::SeeOther()
+            .insert_header(("Location", format!("/q/{hash}/{version}")))
+            .insert_header(("Cache-Control", "no-store"))
+            .finish(),
         Err(error) => error_response(error),
     }
+}
+
+async fn live_query(sql: &str) -> HttpResponse {
+    let (query, hash, version, snapshot) = match materialize(sql).await {
+        Ok(parts) => parts,
+        Err(error) => return error_response(error),
+    };
+    let receiver =
+        Di::instance()
+            .live()
+            .subscribe(query.sql, query.tables, hash, version, &snapshot.body);
+    let stream = UnboundedReceiverStream::new(receiver)
+        .map(|event| Ok::<_, actix_web::Error>(web::Bytes::from(event)));
+    HttpResponse::Ok()
+        .insert_header(("Cache-Control", "no-store"))
+        .content_type("text/event-stream")
+        .streaming(stream)
 }
 
 pub async fn cursor(path: web::Path<(String, String)>) -> HttpResponse {
@@ -31,7 +62,9 @@ pub async fn cursor(path: web::Path<(String, String)>) -> HttpResponse {
     }
 }
 
-async fn run_query(sql: &str) -> Result<(String, String), CacheError> {
+async fn materialize(
+    sql: &str,
+) -> Result<(CacheableQuery, String, u64, Arc<CachedResult>), CacheError> {
     let di = Di::instance();
     if di.replica().is_halted() {
         return Err(CacheError::Halted(
@@ -42,14 +75,17 @@ async fn run_query(sql: &str) -> Result<(String, String), CacheError> {
     }
 
     let query = di.classifier().classify(sql)?;
-    let version = di.versions().version_of(&query.tables, &query.eq_filters);
-    let key = format!("{:x}:{}", query.fingerprint, version.0);
-    let sql = query.sql;
-    let result = di
+    let hash = format!("{:x}", query.fingerprint);
+    let version = di.versions().version_of(&query.tables, &query.eq_filters).0;
+    let key = format!("{hash}:{version}");
+    let snapshot_sql = query.sql.clone();
+    let snapshot = di
         .cache()
-        .get_or_compute(key, async move { rows::query_json(di.db(), &sql).await })
+        .get_or_compute(key, async move {
+            rows::query_json(di.db(), &snapshot_sql).await
+        })
         .await?;
-    Ok((result.etag.clone(), result.body.clone()))
+    Ok((query, hash, version, snapshot))
 }
 
 pub(crate) fn error_response(error: CacheError) -> HttpResponse {

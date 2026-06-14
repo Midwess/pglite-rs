@@ -10,7 +10,6 @@ use crate::cdc::CdcBridge;
 use crate::classify::ReadClassifier;
 use crate::error::CacheError;
 use crate::live::LiveHub;
-use crate::shapelog::ShapeLog;
 use crate::version::VersionIndex;
 
 static INSTANCE: OnceCell<Di> = OnceCell::const_new();
@@ -40,7 +39,6 @@ pub struct Di {
     versions: VersionIndex,
     cache: QueryCache,
     classifier: ReadClassifier,
-    shapes: ShapeLog,
     live: LiveHub,
     tables: HashSet<String>,
     bind_addr: String,
@@ -74,7 +72,6 @@ impl Di {
         let (replicated, pk, full) = scan_schema(&db).await?;
         let versions = VersionIndex::new(pk.clone(), full);
         let cdc = CdcBridge::start(&replica, versions.clone())?;
-        let shapes = ShapeLog::start(&cdc);
         let live = LiveHub::start(&cdc, db.clone(), Arc::new(pk));
         let cache = QueryCache::new(config.cache_size_bytes);
         let classifier = ReadClassifier::new(replicated.clone());
@@ -85,7 +82,6 @@ impl Di {
             versions,
             cache,
             classifier,
-            shapes,
             live,
             tables: replicated,
             bind_addr: config.bind_addr,
@@ -119,10 +115,6 @@ impl Di {
 
     pub fn classifier(&self) -> &ReadClassifier {
         &self.classifier
-    }
-
-    pub fn shapes(&self) -> &ShapeLog {
-        &self.shapes
     }
 
     pub fn live(&self) -> &LiveHub {

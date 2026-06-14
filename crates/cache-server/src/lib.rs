@@ -8,7 +8,6 @@ mod http;
 mod live;
 mod rows;
 mod setup;
-mod shapelog;
 mod version;
 
 #[cfg(test)]

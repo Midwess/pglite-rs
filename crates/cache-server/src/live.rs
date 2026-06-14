@@ -51,10 +51,13 @@ impl LiveHub {
         hub
     }
 
-    pub async fn subscribe(
+    pub fn subscribe(
         &self,
         sql: String,
         tables: Vec<String>,
+        hash: String,
+        version: u64,
+        snapshot_body: &str,
     ) -> mpsc::UnboundedReceiver<String> {
         let (sender, receiver) = mpsc::unbounded_channel();
         let pk = if tables.len() == 1 {
@@ -63,17 +66,15 @@ impl LiveHub {
             None
         };
 
-        let initial = rows::query_json(&self.db, &sql)
-            .await
-            .unwrap_or_else(|_| "[]".to_string());
-        let last = keyed_map(&initial, pk.as_deref());
-        for (key, row) in &last {
-            let _ = sender.send(encode(&Delta::Insert {
-                key: key.clone(),
-                row: row.clone(),
-            }));
-        }
-        let _ = sender.send(up_to_date());
+        let last = keyed_map(snapshot_body, pk.as_deref());
+        let _ = sender.send(format!(
+            "data: {}\n\n",
+            json!({
+                "type": "snapshot",
+                "url": format!("/q/{hash}/{version}"),
+                "version": version,
+            })
+        ));
 
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         self.subs.lock().unwrap().insert(
