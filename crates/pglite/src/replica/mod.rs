@@ -628,9 +628,9 @@ impl Replica {
         snap.simple_query("BEGIN ISOLATION LEVEL REPEATABLE READ")?;
         snap.simple_query(&format!("SET TRANSACTION SNAPSHOT {}", lit(&snapshot)))?;
         let tables = backfill::introspect(&mut snap, &self.config.publication)?;
-        let enums = backfill::introspect_enums(&mut snap, &self.config.publication)?;
+        let types = backfill::introspect_types(&mut snap, &self.config.publication)?;
         let fingerprint = backfill::fingerprint(&tables);
-        backfill::bootstrap_schema(&self.db, &enums, &tables)?;
+        backfill::bootstrap_schema(&self.db, &types, &tables)?;
         backfill::copy_tables(&mut snap, &self.db, &tables)?;
         snap.simple_query("COMMIT")?;
         snap.terminate();

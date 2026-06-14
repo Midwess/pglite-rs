@@ -24,10 +24,96 @@ pub(crate) struct TableDef {
     pub indexes: Vec<String>,
 }
 
-pub(crate) struct EnumDef {
-    pub schema: String,
-    pub name: String,
-    pub labels: Vec<String>,
+#[derive(Debug)]
+pub(crate) enum TypeDef {
+    Enum {
+        schema: String,
+        name: String,
+        labels: Vec<String>,
+    },
+    Composite {
+        schema: String,
+        name: String,
+        attrs: Vec<(String, String)>,
+    },
+    Domain {
+        schema: String,
+        name: String,
+        base: String,
+        not_null: bool,
+        checks: Vec<String>,
+    },
+    Range {
+        schema: String,
+        name: String,
+        subtype: String,
+    },
+}
+
+impl TypeDef {
+    fn schema(&self) -> &str {
+        match self {
+            TypeDef::Enum { schema, .. }
+            | TypeDef::Composite { schema, .. }
+            | TypeDef::Domain { schema, .. }
+            | TypeDef::Range { schema, .. } => schema,
+        }
+    }
+
+    fn target(&self) -> String {
+        let (schema, name) = match self {
+            TypeDef::Enum { schema, name, .. }
+            | TypeDef::Composite { schema, name, .. }
+            | TypeDef::Domain { schema, name, .. }
+            | TypeDef::Range { schema, name, .. } => (schema, name),
+        };
+        format!("{}.{}", ident(schema), ident(name))
+    }
+
+    fn drop_sql(&self) -> String {
+        let kind = match self {
+            TypeDef::Domain { .. } => "DOMAIN",
+            _ => "TYPE",
+        };
+        format!("DROP {kind} IF EXISTS {} CASCADE", self.target())
+    }
+
+    fn create_sql(&self) -> String {
+        let target = self.target();
+        match self {
+            TypeDef::Enum { labels, .. } => {
+                let labels = labels.iter().map(|l| lit(l)).collect::<Vec<_>>().join(", ");
+                format!("CREATE TYPE {target} AS ENUM ({labels})")
+            }
+            TypeDef::Composite { attrs, .. } => {
+                let attrs = attrs
+                    .iter()
+                    .map(|(n, ty)| format!("{} {}", ident(n), ty))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("CREATE TYPE {target} AS ({attrs})")
+            }
+            TypeDef::Domain {
+                base,
+                not_null,
+                checks,
+                ..
+            } => {
+                let mut sql = format!("CREATE DOMAIN {target} AS {base}");
+                if *not_null {
+                    sql.push_str(" NOT NULL");
+                }
+                for check in checks {
+                    sql.push(' ');
+                    sql.push_str(check);
+                }
+                sql
+            }
+            TypeDef::Range { subtype, .. } => {
+                format!("CREATE TYPE {target} AS RANGE (subtype = {subtype})")
+            }
+        }
+    }
 }
 
 pub(crate) fn fingerprint_line<'a>(
@@ -232,50 +318,272 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
     Ok(tables)
 }
 
-pub(crate) fn introspect_enums(
+fn oid_array(oids: impl Iterator<Item = u32>) -> String {
+    format!(
+        "ARRAY[{}]::oid[]",
+        oids.map(|o| o.to_string()).collect::<Vec<_>>().join(", ")
+    )
+}
+
+pub(crate) fn introspect_types(
     snap: &mut ReplConn,
     publication: &str,
-) -> Result<Vec<EnumDef>, Error> {
+) -> Result<Vec<TypeDef>, Error> {
     let pub_lit = lit(publication);
     let rows = snap.simple_query(&format!(
-        "WITH used AS ( \
-           SELECT DISTINCT CASE WHEN col.typtype = 'e' THEN col.oid \
-                                WHEN col.typelem <> 0 THEN col.typelem \
-                                ELSE col.oid END AS type_oid \
+        "WITH RECURSIVE used(oid) AS ( \
+           SELECT a.atttypid \
            FROM pg_publication_tables pt \
            JOIN pg_namespace tn ON tn.nspname = pt.schemaname \
            JOIN pg_class c ON c.relnamespace = tn.oid AND c.relname = pt.tablename \
            JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
-           JOIN pg_type col ON col.oid = a.atttypid \
            WHERE pt.pubname = {pub_lit} \
+         UNION \
+           SELECT dep.oid \
+           FROM used u \
+           JOIN pg_type t ON t.oid = u.oid \
+           CROSS JOIN LATERAL ( \
+             SELECT t.typelem AS oid WHERE t.typelem <> 0 \
+             UNION ALL SELECT t.typbasetype WHERE t.typtype = 'd' \
+             UNION ALL SELECT rng.rngsubtype FROM pg_range rng WHERE rng.rngtypid = t.oid \
+             UNION ALL SELECT ca.atttypid FROM pg_attribute ca \
+               WHERE t.typtype = 'c' AND ca.attrelid = t.typrelid \
+                 AND ca.attnum > 0 AND NOT ca.attisdropped \
+           ) dep \
+           WHERE dep.oid <> 0 \
          ) \
-         SELECT n.nspname::text, t.typname::text, e.enumlabel::text \
+         SELECT u.oid::text, t.typtype::text, n.nspname::text, t.typname::text, \
+                t.typbasetype::text, t.typnotnull::int, format_type(t.typbasetype, t.typtypmod), \
+                (SELECT rng.rngsubtype::text FROM pg_range rng WHERE rng.rngtypid = t.oid), \
+                format_type((SELECT rng.rngsubtype FROM pg_range rng WHERE rng.rngtypid = t.oid), -1) \
          FROM used u \
-         JOIN pg_type t ON t.oid = u.type_oid AND t.typtype = 'e' \
-         JOIN pg_enum e ON e.enumtypid = t.oid \
+         JOIN pg_type t ON t.oid = u.oid \
          JOIN pg_namespace n ON n.oid = t.typnamespace \
-         ORDER BY n.nspname, t.typname, e.enumsortorder"
+         WHERE t.typtype IN ('e', 'c', 'd', 'r')"
     ))?;
-
-    let mut enums: Vec<EnumDef> = Vec::new();
-    for row in &rows {
-        let schema = row.first().and_then(|v| v.as_deref()).unwrap_or_default();
-        let name = row.get(1).and_then(|v| v.as_deref()).unwrap_or_default();
-        let label = row.get(2).and_then(|v| v.as_deref()).unwrap_or_default();
-        if enums
-            .last()
-            .map(|e| e.schema != schema || e.name != name)
-            .unwrap_or(true)
-        {
-            enums.push(EnumDef {
-                schema: schema.to_string(),
-                name: name.to_string(),
-                labels: Vec::new(),
-            });
-        }
-        enums.last_mut().unwrap().labels.push(label.to_string());
+    if rows.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(enums)
+
+    struct Raw {
+        oid: u32,
+        typtype: String,
+        schema: String,
+        name: String,
+        basetype: u32,
+        not_null: bool,
+        base_fmt: String,
+        rngsub: u32,
+        rngsub_fmt: String,
+    }
+    let parse_oid = |v: Option<&str>| -> u32 { v.and_then(|s| s.parse().ok()).unwrap_or(0) };
+    let mut raws: Vec<Raw> = Vec::with_capacity(rows.len());
+    let mut oidset: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for row in &rows {
+        let cell = |i: usize| row.get(i).and_then(|v| v.as_deref());
+        let oid = parse_oid(cell(0));
+        oidset.insert(oid);
+        raws.push(Raw {
+            oid,
+            typtype: cell(1).unwrap_or_default().to_string(),
+            schema: cell(2).unwrap_or_default().to_string(),
+            name: cell(3).unwrap_or_default().to_string(),
+            basetype: parse_oid(cell(4)),
+            not_null: cell(5) == Some("1"),
+            base_fmt: cell(6).unwrap_or_default().to_string(),
+            rngsub: parse_oid(cell(7)),
+            rngsub_fmt: cell(8).unwrap_or_default().to_string(),
+        });
+    }
+
+    let oids_of = |kind: &str| -> Vec<u32> {
+        raws.iter()
+            .filter(|r| r.typtype == kind)
+            .map(|r| r.oid)
+            .collect()
+    };
+    let comp_oids = oids_of("c");
+    let enum_oids = oids_of("e");
+    let dom_oids = oids_of("d");
+
+    let mut attrs: std::collections::HashMap<u32, Vec<(String, String)>> = Default::default();
+    let mut comp_deps: std::collections::HashMap<u32, Vec<u32>> = Default::default();
+    if !comp_oids.is_empty() {
+        let rows = snap.simple_query(&format!(
+            "SELECT t.oid::text, a.attname::text, format_type(a.atttypid, a.atttypmod), a.atttypid::text \
+             FROM pg_type t JOIN pg_attribute a ON a.attrelid = t.typrelid \
+             WHERE t.oid = ANY({}) AND a.attnum > 0 AND NOT a.attisdropped \
+             ORDER BY t.oid, a.attnum",
+            oid_array(comp_oids.iter().copied())
+        ))?;
+        for row in &rows {
+            let cell = |i: usize| row.get(i).and_then(|v| v.as_deref());
+            let oid = parse_oid(cell(0));
+            attrs.entry(oid).or_default().push((
+                cell(1).unwrap_or_default().to_string(),
+                cell(2).unwrap_or_default().to_string(),
+            ));
+            comp_deps.entry(oid).or_default().push(parse_oid(cell(3)));
+        }
+    }
+
+    let mut labels: std::collections::HashMap<u32, Vec<String>> = Default::default();
+    if !enum_oids.is_empty() {
+        let rows = snap.simple_query(&format!(
+            "SELECT t.oid::text, e.enumlabel::text \
+             FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid \
+             WHERE t.oid = ANY({}) ORDER BY t.oid, e.enumsortorder",
+            oid_array(enum_oids.iter().copied())
+        ))?;
+        for row in &rows {
+            let oid = parse_oid(row.first().and_then(|v| v.as_deref()));
+            labels.entry(oid).or_default().push(
+                row.get(1)
+                    .and_then(|v| v.as_deref())
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
+    }
+
+    let mut checks: std::collections::HashMap<u32, Vec<String>> = Default::default();
+    if !dom_oids.is_empty() {
+        let rows = snap.simple_query(&format!(
+            "SELECT con.contypid::text, pg_get_constraintdef(con.oid) \
+             FROM pg_constraint con \
+             WHERE con.contypid = ANY({}) AND con.contype = 'c' \
+             ORDER BY con.contypid, con.conname",
+            oid_array(dom_oids.iter().copied())
+        ))?;
+        for row in &rows {
+            let oid = parse_oid(row.first().and_then(|v| v.as_deref()));
+            checks.entry(oid).or_default().push(
+                row.get(1)
+                    .and_then(|v| v.as_deref())
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
+    }
+
+    let mut items: Vec<(u32, Vec<u32>, TypeDef)> = Vec::with_capacity(raws.len());
+    for r in raws {
+        let in_set = |o: u32| o != 0 && oidset.contains(&o);
+        let (def, deps) = match r.typtype.as_str() {
+            "e" => (
+                TypeDef::Enum {
+                    schema: r.schema,
+                    name: r.name,
+                    labels: labels.remove(&r.oid).unwrap_or_default(),
+                },
+                Vec::new(),
+            ),
+            "c" => {
+                let deps = comp_deps
+                    .remove(&r.oid)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|o| in_set(*o))
+                    .collect();
+                (
+                    TypeDef::Composite {
+                        schema: r.schema,
+                        name: r.name,
+                        attrs: attrs.remove(&r.oid).unwrap_or_default(),
+                    },
+                    deps,
+                )
+            }
+            "d" => {
+                let deps = if in_set(r.basetype) {
+                    vec![r.basetype]
+                } else {
+                    Vec::new()
+                };
+                (
+                    TypeDef::Domain {
+                        schema: r.schema,
+                        name: r.name,
+                        base: r.base_fmt,
+                        not_null: r.not_null,
+                        checks: checks.remove(&r.oid).unwrap_or_default(),
+                    },
+                    deps,
+                )
+            }
+            "r" => {
+                let deps = if in_set(r.rngsub) {
+                    vec![r.rngsub]
+                } else {
+                    Vec::new()
+                };
+                (
+                    TypeDef::Range {
+                        schema: r.schema,
+                        name: r.name,
+                        subtype: r.rngsub_fmt,
+                    },
+                    deps,
+                )
+            }
+            _ => continue,
+        };
+        items.push((r.oid, deps, def));
+    }
+
+    topo_order(items)
+}
+
+fn topo_order(items: Vec<(u32, Vec<u32>, TypeDef)>) -> Result<Vec<TypeDef>, Error> {
+    let index: std::collections::HashMap<u32, usize> =
+        items.iter().enumerate().map(|(i, it)| (it.0, i)).collect();
+    let n = items.len();
+    let mut state = vec![0u8; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    for start in 0..n {
+        if state[start] != 0 {
+            continue;
+        }
+        let mut stack = vec![(start, 0usize)];
+        while let Some(&(node, di)) = stack.last() {
+            if di == 0 {
+                state[node] = 1;
+            }
+            let deps = &items[node].1;
+            let mut k = di;
+            let mut next = None;
+            while k < deps.len() {
+                let dep = deps[k];
+                k += 1;
+                if let Some(&j) = index.get(&dep) {
+                    match state[j] {
+                        0 => {
+                            next = Some(j);
+                            break;
+                        }
+                        1 => {
+                            return Err(Error::ReplicaConfig(format!(
+                                "cyclic user-defined type dependency involving type oid {}",
+                                items[node].0
+                            )))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            stack.last_mut().unwrap().1 = k;
+            match next {
+                Some(j) => stack.push((j, 0)),
+                None => {
+                    state[node] = 2;
+                    order.push(node);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    let mut defs: Vec<Option<TypeDef>> = items.into_iter().map(|it| Some(it.2)).collect();
+    Ok(order.into_iter().map(|i| defs[i].take().unwrap()).collect())
 }
 
 fn create_table_sql(t: &TableDef) -> String {
@@ -302,26 +610,20 @@ fn create_table_sql(t: &TableDef) -> String {
 
 pub(crate) fn bootstrap_schema(
     db: &PGlite,
-    enums: &[EnumDef],
+    types: &[TypeDef],
     tables: &[TableDef],
 ) -> Result<(), Error> {
     block_on(async {
-        for e in enums {
-            if e.schema != "public" {
-                db.exec(&format!("CREATE SCHEMA IF NOT EXISTS {}", ident(&e.schema)))
-                    .await?;
+        for ty in types {
+            if ty.schema() != "public" {
+                db.exec(&format!(
+                    "CREATE SCHEMA IF NOT EXISTS {}",
+                    ident(ty.schema())
+                ))
+                .await?;
             }
-            let target = format!("{}.{}", ident(&e.schema), ident(&e.name));
-            db.exec(&format!("DROP TYPE IF EXISTS {target} CASCADE"))
-                .await?;
-            let labels = e
-                .labels
-                .iter()
-                .map(|l| lit(l))
-                .collect::<Vec<_>>()
-                .join(", ");
-            db.exec(&format!("CREATE TYPE {target} AS ENUM ({labels})"))
-                .await?;
+            db.exec(&ty.drop_sql()).await?;
+            db.exec(&ty.create_sql()).await?;
         }
         for t in tables {
             if t.schema != "public" {
@@ -426,6 +728,109 @@ mod tests {
             row_filter: None,
             indexes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn type_def_create_sql_per_kind() {
+        assert_eq!(
+            TypeDef::Enum {
+                schema: "public".into(),
+                name: "mood".into(),
+                labels: vec!["sad".into(), "ok".into()],
+            }
+            .create_sql(),
+            "CREATE TYPE \"public\".\"mood\" AS ENUM ('sad', 'ok')"
+        );
+        assert_eq!(
+            TypeDef::Composite {
+                schema: "public".into(),
+                name: "addr".into(),
+                attrs: vec![
+                    ("street".into(), "text".into()),
+                    ("zip".into(), "integer".into()),
+                ],
+            }
+            .create_sql(),
+            "CREATE TYPE \"public\".\"addr\" AS (\"street\" text, \"zip\" integer)"
+        );
+        assert_eq!(
+            TypeDef::Domain {
+                schema: "public".into(),
+                name: "pos".into(),
+                base: "integer".into(),
+                not_null: true,
+                checks: vec!["CHECK ((VALUE > 0))".into()],
+            }
+            .create_sql(),
+            "CREATE DOMAIN \"public\".\"pos\" AS integer NOT NULL CHECK ((VALUE > 0))"
+        );
+        assert_eq!(
+            TypeDef::Range {
+                schema: "public".into(),
+                name: "floatrange".into(),
+                subtype: "double precision".into(),
+            }
+            .create_sql(),
+            "CREATE TYPE \"public\".\"floatrange\" AS RANGE (subtype = double precision)"
+        );
+    }
+
+    #[test]
+    fn type_def_drop_sql_uses_domain_keyword() {
+        let dom = TypeDef::Domain {
+            schema: "public".into(),
+            name: "pos".into(),
+            base: "integer".into(),
+            not_null: false,
+            checks: Vec::new(),
+        };
+        assert_eq!(
+            dom.drop_sql(),
+            "DROP DOMAIN IF EXISTS \"public\".\"pos\" CASCADE"
+        );
+        let en = TypeDef::Enum {
+            schema: "public".into(),
+            name: "mood".into(),
+            labels: Vec::new(),
+        };
+        assert_eq!(
+            en.drop_sql(),
+            "DROP TYPE IF EXISTS \"public\".\"mood\" CASCADE"
+        );
+    }
+
+    fn named(oid: u32) -> TypeDef {
+        TypeDef::Enum {
+            schema: "public".into(),
+            name: format!("t{oid}"),
+            labels: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn topo_order_emits_dependencies_first() {
+        // 3 depends on 2 depends on 1
+        let items = vec![
+            (3u32, vec![2u32], named(3)),
+            (1u32, vec![], named(1)),
+            (2u32, vec![1u32], named(2)),
+        ];
+        let order = topo_order(items).unwrap();
+        let names: Vec<&str> = order
+            .iter()
+            .map(|t| match t {
+                TypeDef::Enum { name, .. } => name.as_str(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(names, vec!["t1", "t2", "t3"]);
+    }
+
+    #[test]
+    fn topo_order_detects_cycle() {
+        let items = vec![(1u32, vec![2u32], named(1)), (2u32, vec![1u32], named(2))];
+        let err = topo_order(items).unwrap_err().to_string();
+        assert!(err.contains("cyclic"), "{err}");
     }
 
     #[test]
