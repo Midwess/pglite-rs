@@ -8,6 +8,7 @@ use crate::cache::QueryCache;
 use crate::cdc::CdcBridge;
 use crate::classify::ReadClassifier;
 use crate::error::CacheError;
+use crate::shapelog::ShapeLog;
 use crate::upstream::Upstream;
 use crate::version::VersionIndex;
 
@@ -59,6 +60,8 @@ pub(crate) struct AppState {
     pub cache: QueryCache,
     pub classifier: Arc<ReadClassifier>,
     pub upstream: Arc<Upstream>,
+    pub shapes: ShapeLog,
+    pub tables: Arc<HashSet<String>>,
 }
 
 pub struct CacheServer {
@@ -91,8 +94,10 @@ impl CacheServer {
         let (replicated, pk, full) = scan_schema(&db).await?;
         let versions = VersionIndex::new(pk, full);
         let cdc = CdcBridge::start(&replica, versions.clone())?;
+        let shapes = ShapeLog::start(&cdc);
         let cache = QueryCache::new(config.cache_size_bytes);
-        let classifier = Arc::new(ReadClassifier::new(replicated));
+        let classifier = Arc::new(ReadClassifier::new(replicated.clone()));
+        let tables = Arc::new(replicated);
         let upstream = Arc::new(Upstream::new(
             &config.upstream.host,
             config.upstream.port,
@@ -108,6 +113,8 @@ impl CacheServer {
             cache,
             classifier,
             upstream,
+            shapes,
+            tables,
         };
 
         Ok(CacheServer {

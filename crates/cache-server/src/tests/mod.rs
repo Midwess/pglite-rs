@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use pglite::{CommittedTransaction, Lsn, RowChange};
 
 use crate::classify::{Plan, ReadClassifier};
+use crate::shapelog::ShapeLog;
 use crate::version::VersionIndex;
 
 fn classifier() -> ReadClassifier {
@@ -200,4 +201,57 @@ fn join_query_stays_table_level() {
         &[("id".to_string(), "7".to_string())],
     );
     assert_eq!(joined.0, 100);
+}
+
+fn insert_users(id: &str, end_lsn: u64) -> CommittedTransaction {
+    CommittedTransaction {
+        xid: 1,
+        commit_lsn: Lsn(end_lsn.saturating_sub(1)),
+        end_lsn: Lsn(end_lsn),
+        commit_ts: 0,
+        changes: vec![RowChange::Insert {
+            schema: "public".to_string(),
+            table: "users".to_string(),
+            row: vec![("id".to_string(), Some(id.to_string()))],
+        }],
+    }
+}
+
+#[test]
+fn shape_log_appends_and_ranges_after_offset() {
+    let log = ShapeLog::new();
+    log.ingest(&insert_users("1", 10));
+    log.ingest(&insert_users("2", 20));
+    let range = log.range("users", 10);
+    assert_eq!(range.changes.len(), 1);
+    assert_eq!(range.changes[0].offset, 20);
+    assert_eq!(range.latest_offset, 20);
+    assert!(!range.must_refetch);
+}
+
+#[test]
+fn shape_log_up_to_date_is_empty() {
+    let log = ShapeLog::new();
+    log.ingest(&insert_users("1", 10));
+    let range = log.range("users", 10);
+    assert!(range.changes.is_empty());
+    assert!(!range.must_refetch);
+}
+
+#[test]
+fn shape_log_unknown_table_is_empty() {
+    let log = ShapeLog::new();
+    let range = log.range("ghost", 0);
+    assert!(range.changes.is_empty());
+    assert!(!range.must_refetch);
+}
+
+#[test]
+fn shape_log_eviction_signals_refetch() {
+    let log = ShapeLog::new();
+    for offset in 1..=1100u64 {
+        log.ingest(&insert_users(&offset.to_string(), offset));
+    }
+    assert!(log.range("users", 5).must_refetch);
+    assert!(!log.range("users", 1050).must_refetch);
 }

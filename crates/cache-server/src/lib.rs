@@ -5,6 +5,7 @@ mod classify;
 mod error;
 mod http;
 mod rows;
+mod shapelog;
 mod upstream;
 mod version;
 

@@ -75,7 +75,7 @@ async fn run_query(state: &AppState, sql: &str) -> Result<(String, String), Cach
     }
 }
 
-fn error_response(error: CacheError) -> HttpResponse {
+pub(crate) fn error_response(error: CacheError) -> HttpResponse {
     let code = match &error {
         CacheError::Rejected(_) | CacheError::Parse(_) => StatusCode::BAD_REQUEST,
         CacheError::Halted(_) => StatusCode::SERVICE_UNAVAILABLE,
