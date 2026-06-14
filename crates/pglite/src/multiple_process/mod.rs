@@ -34,8 +34,10 @@ static INSTANCE_COUNTER: AtomicU32 = AtomicU32::new(0);
 pub struct MultiProcessOptions {
     pub username: String,
     pub database: String,
+    pub min_connections: usize,
     pub max_connections: usize,
     pub extra_connections: usize,
+    pub idle_ttl: Duration,
     pub relaxed_durability: bool,
     pub start_params: Vec<String>,
     pub locale_provider: LocaleProvider,
@@ -46,8 +48,10 @@ impl Default for MultiProcessOptions {
         MultiProcessOptions {
             username: "postgres".into(),
             database: "postgres".into(),
-            max_connections: 4,
+            min_connections: 0,
+            max_connections: 5,
             extra_connections: 4,
+            idle_ttl: Duration::from_secs(300),
             relaxed_durability: false,
             start_params: Vec::new(),
             locale_provider: LocaleProvider::default(),
@@ -223,9 +227,14 @@ impl PGlite {
             options.locale_provider,
         )?;
 
-        let pool_size = options.max_connections.max(2);
+        let pool_size = options.max_connections.max(1);
         let server = Server::spawn(&runtime_dir, &data_dir, &options, pool_size)?;
-        let pool = Pool::start(server, pool_size, &options.username, &options.database)?;
+        let config = pool::PoolConfig {
+            min: options.min_connections.min(pool_size),
+            max: pool_size,
+            idle_ttl: options.idle_ttl,
+        };
+        let pool = Pool::start(server, config, &options.username, &options.database)?;
         let db = PGlite::assemble(Backend::MultiProcess(Arc::new(pool)), data_dir);
         db.sweep_live_views().await?;
         Ok(db)

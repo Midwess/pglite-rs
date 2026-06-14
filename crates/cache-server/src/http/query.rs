@@ -17,11 +17,17 @@ pub struct QueryParams {
     live: Option<bool>,
 }
 
-pub async fn query(params: web::Query<QueryParams>, body: String) -> HttpResponse {
+#[derive(Deserialize)]
+pub struct QueryBody {
+    sql: String,
+}
+
+pub async fn query(params: web::Query<QueryParams>, body: web::Json<QueryBody>) -> HttpResponse {
+    let sql = body.sql.as_str();
     if params.live.unwrap_or(false) {
-        return live_query(&body).await;
+        return live_query(sql).await;
     }
-    match materialize(&body).await {
+    match materialize(sql).await {
         Ok((_, hash, version, _)) => HttpResponse::SeeOther()
             .insert_header(("Location", format!("/q/{hash}/{version}")))
             .insert_header(("Cache-Control", "no-store"))

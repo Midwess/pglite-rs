@@ -22,19 +22,19 @@ ruzstd = "0.8"
 libc = "0.2"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-pglite-rs-lib-aarch64-apple-darwin = { path = "../lib-aarch64-apple-darwin", version = "=0.2.1" }
+pglite-rs-lib-aarch64-apple-darwin = { path = "../lib-aarch64-apple-darwin", version = "=0.2.2" }
 
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
-pglite-rs-lib-x86_64-apple-darwin = { path = "../lib-x86_64-apple-darwin", version = "=0.2.1" }
+pglite-rs-lib-x86_64-apple-darwin = { path = "../lib-x86_64-apple-darwin", version = "=0.2.2" }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))'.dependencies]
-pglite-rs-lib-x86_64-unknown-linux-gnu = { path = "../lib-x86_64-unknown-linux-gnu", version = "=0.2.1" }
+pglite-rs-lib-x86_64-unknown-linux-gnu = { path = "../lib-x86_64-unknown-linux-gnu", version = "=0.2.2" }
 
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64", target_env = "gnu"))'.dependencies]
-pglite-rs-lib-aarch64-unknown-linux-gnu = { path = "../lib-aarch64-unknown-linux-gnu", version = "=0.2.1" }
+pglite-rs-lib-aarch64-unknown-linux-gnu = { path = "../lib-aarch64-unknown-linux-gnu", version = "=0.2.2" }
 
 [target.'cfg(all(target_os = "windows", target_env = "gnu"))'.dependencies]
-pglite-rs-lib-x86_64-pc-windows-gnu = { path = "../lib-x86_64-pc-windows-gnu", version = "=0.2.1" }
+pglite-rs-lib-x86_64-pc-windows-gnu = { path = "../lib-x86_64-pc-windows-gnu", version = "=0.2.2" }
 
 [features]
 icu = []

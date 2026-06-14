@@ -475,7 +475,58 @@ fn connection_uri_serves_external_clients() {
         drop(stream);
 
         let rows = db.query("SHOW max_connections", &[]).await.unwrap();
-        assert_eq!(rows[0].get::<&str>(0).unwrap(), "7");
+        assert_eq!(rows[0].get::<&str>(0).unwrap(), "8");
+
+        db.close().await.unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    });
+}
+
+#[test]
+fn elastic_pool_lazy_start_and_scales_to_zero() {
+    async fn client_backends(db: &PGlite) -> i64 {
+        db.query(
+            "SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend'",
+            &[],
+        )
+        .await
+        .unwrap()[0]
+            .get::<i64>(0)
+            .unwrap()
+    }
+
+    block_on(async {
+        let base = std::env::temp_dir().join(format!("pgl-mpelastic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let db = PGlite::open_multi_process(
+            &base,
+            MultiProcessOptions {
+                min_connections: 0,
+                max_connections: 3,
+                idle_ttl: Duration::from_secs(1),
+                ..MultiProcessOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let tx1 = db.transaction().await.unwrap();
+        let tx2 = db.transaction().await.unwrap();
+        let tx3 = db.transaction().await.unwrap();
+        tx1.commit().await.unwrap();
+        tx2.commit().await.unwrap();
+        tx3.commit().await.unwrap();
+
+        assert_eq!(client_backends(&db).await, 3, "pool grows to max on demand");
+
+        std::thread::sleep(Duration::from_secs(3));
+
+        assert_eq!(
+            client_backends(&db).await,
+            1,
+            "idle connections reaped to min=0 after idle_ttl"
+        );
 
         db.close().await.unwrap();
         let _ = std::fs::remove_dir_all(&base);

@@ -1,7 +1,9 @@
 .dev/
 CONTEXT.md
+.DS_Store
 
 target/
+cache-data/
 node_modules/
 dist/
 .next/
