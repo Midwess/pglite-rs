@@ -55,6 +55,10 @@ pub(crate) enum PgOutputMsg {
     Truncate {
         rel_ids: Vec<u32>,
     },
+    Message {
+        prefix: String,
+        content: Vec<u8>,
+    },
     Other,
 }
 
@@ -250,7 +254,18 @@ pub(crate) fn decode(data: &[u8]) -> Result<PgOutputMsg, Error> {
             }
             Ok(PgOutputMsg::Truncate { rel_ids })
         }
-        b'O' | b'Y' | b'M' => Ok(PgOutputMsg::Other),
+        b'M' => {
+            let _flags = c.u8()?;
+            let _lsn = c.u64()?;
+            let prefix = c.cstr()?;
+            let len = c.i32()?;
+            if len < 0 {
+                return Err(Error::Protocol("negative logical message length".into()));
+            }
+            let content = c.take(len as usize)?.to_vec();
+            Ok(PgOutputMsg::Message { prefix, content })
+        }
+        b'O' | b'Y' => Ok(PgOutputMsg::Other),
         other => Err(Error::Protocol(format!(
             "unknown pgoutput message tag: {}",
             other as char
@@ -444,6 +459,22 @@ mod tests {
             decode(&buf).unwrap(),
             PgOutputMsg::Truncate {
                 rel_ids: vec![7, 9]
+            }
+        );
+    }
+
+    #[test]
+    fn decode_logical_message() {
+        let mut buf = vec![b'M', 1];
+        buf.extend_from_slice(&42u64.to_be_bytes());
+        buf.extend_from_slice(&cstr("pglite_ddl"));
+        buf.extend_from_slice(&3i32.to_be_bytes());
+        buf.extend_from_slice(b"abc");
+        assert_eq!(
+            decode(&buf).unwrap(),
+            PgOutputMsg::Message {
+                prefix: "pglite_ddl".into(),
+                content: b"abc".to_vec(),
             }
         );
     }

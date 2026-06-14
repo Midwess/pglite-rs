@@ -49,6 +49,7 @@ fn replica_end_to_end() {
         "DROP TABLE IF EXISTS public.repl_todos;
          DROP TABLE IF EXISTS public.repl_typed;
          DROP TABLE IF EXISTS public.repl_nopk;
+         DROP TABLE IF EXISTS public.repl_new;
          DROP TYPE IF EXISTS public.repl_addr CASCADE;
          DROP TYPE IF EXISTS public.repl_num CASCADE;
          DROP DOMAIN IF EXISTS public.repl_pos CASCADE;
@@ -64,6 +65,15 @@ fn replica_end_to_end() {
          INSERT INTO public.repl_nopk VALUES (1, 'x'), (2, 'y');
          CREATE PUBLICATION pglite_test_pub FOR TABLE public.repl_todos, public.repl_typed, public.repl_nopk;",
     )
+    .unwrap();
+
+    up.batch_execute(&format!(
+        "CREATE OR REPLACE FUNCTION public.pglite_emit_ddl() RETURNS event_trigger \
+         LANGUAGE plpgsql AS $fn$ BEGIN PERFORM pg_logical_emit_message(true, '{}', ''); END $fn$; \
+         DROP EVENT TRIGGER IF EXISTS pglite_ddl_watch; \
+         CREATE EVENT TRIGGER pglite_ddl_watch ON ddl_command_end EXECUTE FUNCTION public.pglite_emit_ddl();",
+        pglite::DDL_SIGNAL_PREFIX
+    ))
     .unwrap();
 
     let db = block_on(PGlite::open_temp()).unwrap();
@@ -242,16 +252,57 @@ fn replica_end_to_end() {
     assert!(matches!(after_churn.changes[0], RowChange::Insert { .. }));
     assert_ne!(stamp(&db), before_churn);
 
+    up.batch_execute(
+        "ALTER TABLE public.repl_todos DROP COLUMN extra;
+         CREATE TABLE public.repl_new (id int PRIMARY KEY, v text);
+         ALTER PUBLICATION pglite_test_pub ADD TABLE public.repl_new;",
+    )
+    .unwrap();
+    up.execute("INSERT INTO public.repl_new VALUES (1, 'alpha')", &[])
+        .unwrap();
+
+    assert!(wait_until(Duration::from_secs(30), || {
+        block_on(db.query("SELECT v FROM repl_new WHERE id = 1", &[]))
+            .ok()
+            .and_then(|rows| rows.first().map(|r| r.get::<&str>(0).unwrap().to_string()))
+            == Some("alpha".to_string())
+    }));
+    assert!(!replica3.is_halted());
+
+    up.execute("INSERT INTO public.repl_todos VALUES (8, 'eight')", &[])
+        .unwrap();
+    let got8 = wait_until(Duration::from_secs(30), || {
+        replica3.is_halted()
+            || block_on(db.query("SELECT count(*) FROM repl_todos WHERE id = 8", &[]))
+                .map(|rows| rows[0].get::<i64>(0).unwrap() == 1)
+                .unwrap_or(false)
+    });
+    if replica3.is_halted() {
+        panic!("replica3 halted: {:?}", replica3.halt_reason());
+    }
+    assert!(got8);
+    let extra_cols = block_on(db.query(
+        "SELECT count(*) FROM information_schema.columns \
+         WHERE table_name = 'repl_todos' AND column_name = 'extra'",
+        &[],
+    ))
+    .unwrap();
+    assert_eq!(extra_cols[0].get::<i64>(0).unwrap(), 0);
+    assert!(!replica3.is_halted());
+
     replica3.stop();
     assert!(wait_until(Duration::from_secs(10), || replica3.is_stopped()));
     assert!(!replica3.is_halted());
 
     block_on(Replica::decommission(&db, &config)).unwrap();
     let _ = up.batch_execute(
-        "DROP PUBLICATION IF EXISTS pglite_test_pub; \
+        "DROP EVENT TRIGGER IF EXISTS pglite_ddl_watch; \
+         DROP FUNCTION IF EXISTS public.pglite_emit_ddl(); \
+         DROP PUBLICATION IF EXISTS pglite_test_pub; \
          DROP TABLE IF EXISTS public.repl_todos; \
          DROP TABLE IF EXISTS public.repl_typed; \
          DROP TABLE IF EXISTS public.repl_nopk; \
+         DROP TABLE IF EXISTS public.repl_new; \
          DROP TABLE IF EXISTS public.side; \
          DROP TYPE IF EXISTS public.repl_addr CASCADE; \
          DROP TYPE IF EXISTS public.repl_num CASCADE; \

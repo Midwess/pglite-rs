@@ -19,6 +19,8 @@ use meta::ReplicaState;
 use pgoutput::{CellValue, PgOutputMsg, RelColumn, TupleData};
 use wire::{ReplConn, ReplMsg};
 
+pub const DDL_SIGNAL_PREFIX: &str = "pglite_ddl";
+
 pub(crate) fn ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
@@ -858,10 +860,46 @@ impl Replica {
                             });
                         }
                     }
+                    PgOutputMsg::Message { prefix, .. } => {
+                        if prefix == DDL_SIGNAL_PREFIX {
+                            self.resync_schema(&mut expected, &mut rels)?;
+                        }
+                    }
                     PgOutputMsg::Other => {}
                 },
             }
         }
+    }
+
+    fn resync_schema(
+        &self,
+        expected: &mut HashMap<(String, String), String>,
+        rels: &mut HashMap<u32, Rel>,
+    ) -> Result<(), Error> {
+        let mut snap = ReplConn::connect_and_auth(&self.config, false)?;
+        let old_lines: Vec<String> = expected.values().cloned().collect();
+        let result =
+            backfill::apply_schema_delta(&mut snap, &self.db, &self.config.publication, &old_lines);
+        snap.terminate();
+        let new_tables = result?;
+        let fingerprint = backfill::fingerprint(&new_tables);
+        let mut new_sorted: Vec<&str> = fingerprint.lines().collect();
+        new_sorted.sort_unstable();
+        let mut old_sorted: Vec<&str> = old_lines.iter().map(|s| s.as_str()).collect();
+        old_sorted.sort_unstable();
+        if new_sorted == old_sorted {
+            return Ok(());
+        }
+        block_on(meta::update_fingerprint(&self.db, &fingerprint))?;
+        expected.clear();
+        for line in fingerprint.lines() {
+            let mut parts = line.splitn(3, '|');
+            if let (Some(schema), Some(table)) = (parts.next(), parts.next()) {
+                expected.insert((schema.to_string(), table.to_string()), line.to_string());
+            }
+        }
+        rels.retain(|_, r| expected.contains_key(&(r.schema.clone(), r.name.clone())));
+        Ok(())
     }
 
     fn rel(rels: &HashMap<u32, Rel>, rel_id: u32) -> Result<&Rel, Error> {

@@ -56,7 +56,9 @@ pub use live::LiveQuery;
 pub use multiple_process::MultiProcessOptions;
 pub use postgres_types::{FromSql, ToSql};
 #[cfg(feature = "replica")]
-pub use replica::{CommittedTransaction, Lsn, Replica, ReplicaConfig, RowChange, SslMode};
+pub use replica::{
+    CommittedTransaction, Lsn, Replica, ReplicaConfig, RowChange, SslMode, DDL_SIGNAL_PREFIX,
+};
 pub use row::{Column, Row};
 pub use transaction::Transaction;
 

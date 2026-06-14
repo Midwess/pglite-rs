@@ -60,14 +60,17 @@ impl TypeDef {
         }
     }
 
+    fn name(&self) -> &str {
+        match self {
+            TypeDef::Enum { name, .. }
+            | TypeDef::Composite { name, .. }
+            | TypeDef::Domain { name, .. }
+            | TypeDef::Range { name, .. } => name,
+        }
+    }
+
     fn target(&self) -> String {
-        let (schema, name) = match self {
-            TypeDef::Enum { schema, name, .. }
-            | TypeDef::Composite { schema, name, .. }
-            | TypeDef::Domain { schema, name, .. }
-            | TypeDef::Range { schema, name, .. } => (schema, name),
-        };
-        format!("{}.{}", ident(schema), ident(name))
+        format!("{}.{}", ident(self.schema()), ident(self.name()))
     }
 
     fn drop_sql(&self) -> String {
@@ -752,6 +755,132 @@ pub(crate) fn copy_tables(
         }
     }
     Ok(())
+}
+
+pub(crate) fn apply_schema_delta(
+    snap: &mut ReplConn,
+    db: &PGlite,
+    publication: &str,
+    old_lines: &[String],
+) -> Result<Vec<TableDef>, Error> {
+    let new_tables = introspect(snap, publication)?;
+    check_extension_types(snap, &new_tables)?;
+    let new_types = introspect_types(snap, publication)?;
+
+    let old: std::collections::HashMap<(String, String), Vec<(String, u32)>> = old_lines
+        .iter()
+        .filter_map(|line| {
+            let mut parts = line.split('|');
+            let schema = parts.next()?.to_string();
+            let table = parts.next()?.to_string();
+            let cols = parts
+                .filter_map(|seg| {
+                    let (name, oid) = seg.rsplit_once(':')?;
+                    Some((name.to_string(), oid.parse().ok()?))
+                })
+                .collect();
+            Some(((schema, table), cols))
+        })
+        .collect();
+
+    let new_keys: std::collections::HashSet<(String, String)> = new_tables
+        .iter()
+        .map(|t| (t.schema.clone(), t.name.clone()))
+        .collect();
+
+    block_on(async {
+        for ty in &new_types {
+            let schema = ty.schema();
+            let name = ty.name();
+            let exists = !db
+                .query(
+                    "SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace \
+                     WHERE n.nspname = $1 AND t.typname = $2",
+                    &[&schema, &name],
+                )
+                .await?
+                .is_empty();
+            if !exists {
+                if schema != "public" {
+                    db.exec(&format!("CREATE SCHEMA IF NOT EXISTS {}", ident(schema)))
+                        .await?;
+                }
+                db.exec(&ty.create_sql()).await?;
+            }
+        }
+
+        for (schema, table) in old.keys() {
+            if !new_keys.contains(&(schema.clone(), table.clone())) {
+                db.exec(&format!(
+                    "DROP TABLE IF EXISTS {}.{} CASCADE",
+                    ident(schema),
+                    ident(table)
+                ))
+                .await?;
+            }
+        }
+
+        for t in &new_tables {
+            let key = (t.schema.clone(), t.name.clone());
+            match old.get(&key) {
+                None => {
+                    if t.schema != "public" {
+                        db.exec(&format!("CREATE SCHEMA IF NOT EXISTS {}", ident(&t.schema)))
+                            .await?;
+                    }
+                    db.exec(&format!(
+                        "DROP TABLE IF EXISTS {}.{} CASCADE",
+                        ident(&t.schema),
+                        ident(&t.name)
+                    ))
+                    .await?;
+                    db.exec(&create_table_sql(t)).await?;
+                    for index in &t.indexes {
+                        db.query(index, &[]).await?;
+                    }
+                }
+                Some(old_cols) => {
+                    let target = format!("{}.{}", ident(&t.schema), ident(&t.name));
+                    let old_names: std::collections::HashSet<&str> =
+                        old_cols.iter().map(|(n, _)| n.as_str()).collect();
+                    let new_names: std::collections::HashSet<&str> =
+                        t.columns.iter().map(|c| c.name.as_str()).collect();
+                    for c in &t.columns {
+                        if !old_names.contains(c.name.as_str()) {
+                            db.exec(&format!(
+                                "ALTER TABLE {target} ADD COLUMN IF NOT EXISTS {} {}",
+                                ident(&c.name),
+                                c.type_sql
+                            ))
+                            .await?;
+                        }
+                    }
+                    for (name, old_oid) in old_cols {
+                        if !new_names.contains(name.as_str()) {
+                            db.exec(&format!(
+                                "ALTER TABLE {target} DROP COLUMN IF EXISTS {}",
+                                ident(name)
+                            ))
+                            .await?;
+                        } else if t
+                            .columns
+                            .iter()
+                            .any(|c| &c.name == name && c.type_oid != *old_oid)
+                        {
+                            return Err(Error::ReplicaHalted(format!(
+                                "incompatible column type change on {}.{} column {name}; \
+                                 run Replica::decommission and start again for a full resync",
+                                t.schema, t.name
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        Ok::<(), Error>(())
+    })?;
+
+    Ok(new_tables)
 }
 
 #[cfg(test)]

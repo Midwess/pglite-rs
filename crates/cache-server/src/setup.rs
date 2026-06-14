@@ -23,6 +23,7 @@ pub async fn prepare(upstream: &UpstreamConfig) -> Result<(), CacheError> {
     println!(
         "  2. CREATE PUBLICATION \"{publication}\" FOR ALL TABLES (only if it does not exist)"
     );
+    println!("  3. install a DDL event trigger (CREATE FUNCTION + CREATE EVENT TRIGGER) so schema changes replicate online");
     println!("The replication slot is created automatically when the server starts.");
     print!("Proceed? [y/N] ");
     io::stdout().flush().ok();
@@ -127,6 +128,13 @@ async fn apply(client: &Client, publication: &str) -> Result<(), CacheError> {
         println!("  ✓ created publication \"{publication}\" FOR ALL TABLES");
     }
 
+    match install_ddl_trigger(client).await {
+        Ok(()) => println!("  ✓ installed DDL event trigger (online schema-change capture)"),
+        Err(error) => println!(
+            "  ⚠ could not install DDL event trigger ({error}); online schema changes fall back to reactive recovery (needs superuser)"
+        ),
+    }
+
     if needs_restart {
         println!();
         println!(
@@ -135,6 +143,22 @@ async fn apply(client: &Client, publication: &str) -> Result<(), CacheError> {
         println!("    docker compose restart <postgres-service>   # or: pg_ctl restart");
     }
     println!("init complete — after any restart, start the server with `cache-server serve`.");
+    Ok(())
+}
+
+async fn install_ddl_trigger(client: &Client) -> Result<(), CacheError> {
+    let prefix = pglite::DDL_SIGNAL_PREFIX;
+    client
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION pglite_emit_ddl() RETURNS event_trigger \
+             LANGUAGE plpgsql AS $fn$ BEGIN \
+               PERFORM pg_logical_emit_message(true, '{prefix}', ''); \
+             END $fn$; \
+             DROP EVENT TRIGGER IF EXISTS pglite_ddl_watch; \
+             CREATE EVENT TRIGGER pglite_ddl_watch ON ddl_command_end \
+               EXECUTE FUNCTION pglite_emit_ddl();"
+        ))
+        .await?;
     Ok(())
 }
 

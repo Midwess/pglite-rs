@@ -333,7 +333,7 @@ impl ReplConn {
         publication: &str,
     ) -> Result<(), Error> {
         let sql = format!(
-            "START_REPLICATION SLOT \"{}\" LOGICAL {} (proto_version '1', publication_names '\"{}\"')",
+            "START_REPLICATION SLOT \"{}\" LOGICAL {} (proto_version '1', publication_names '\"{}\"', messages 'true')",
             slot.replace('"', "\"\""),
             start.to_pg_str(),
             publication.replace('"', "\"\"")
