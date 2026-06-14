@@ -88,8 +88,8 @@ impl CacheServer {
         };
         let replica = Replica::start(db.clone(), replica_config).await?;
 
-        let (replicated, pk) = scan_schema(&db).await?;
-        let versions = VersionIndex::new(pk);
+        let (replicated, pk, full) = scan_schema(&db).await?;
+        let versions = VersionIndex::new(pk, full);
         let cdc = CdcBridge::start(&replica, versions.clone())?;
         let cache = QueryCache::new(config.cache_size_bytes);
         let classifier = Arc::new(ReadClassifier::new(replicated));
@@ -127,7 +127,7 @@ impl CacheServer {
 
 async fn scan_schema(
     db: &PGlite,
-) -> Result<(HashSet<String>, HashMap<String, String>), CacheError> {
+) -> Result<(HashSet<String>, HashMap<String, String>, HashSet<String>), CacheError> {
     let table_rows = db
         .query(
             "select tablename from pg_tables \
@@ -167,7 +167,22 @@ async fn scan_schema(
         .map(|(table, mut columns)| (table, columns.remove(0)))
         .collect();
 
-    Ok((tables, pk))
+    let full_rows = db
+        .query(
+            "select c.relname from pg_class c \
+             join pg_namespace n on n.oid = c.relnamespace \
+             where c.relkind = 'r' and c.relreplident = 'f' \
+               and n.nspname not in ('pg_catalog', 'information_schema')",
+            &[],
+        )
+        .await?;
+    let mut full = HashSet::new();
+    for row in full_rows {
+        let name: String = row.get(0)?;
+        full.insert(name);
+    }
+
+    Ok((tables, pk, full))
 }
 
 fn env_or(key: &str, default: &str) -> String {

@@ -79,7 +79,36 @@ fn equality_filter_is_extracted_for_cacheable() {
 fn users_versions() -> VersionIndex {
     let mut pk = HashMap::new();
     pk.insert("users".to_string(), "id".to_string());
-    VersionIndex::new(pk)
+    VersionIndex::new(pk, HashSet::new())
+}
+
+fn full_events_versions() -> VersionIndex {
+    let mut pk = HashMap::new();
+    pk.insert("events".to_string(), "id".to_string());
+    let mut full = HashSet::new();
+    full.insert("events".to_string());
+    VersionIndex::new(pk, full)
+}
+
+fn update_event_status(old: &str, new: &str, end_lsn: u64) -> CommittedTransaction {
+    CommittedTransaction {
+        xid: 1,
+        commit_lsn: Lsn(end_lsn.saturating_sub(1)),
+        end_lsn: Lsn(end_lsn),
+        commit_ts: 0,
+        changes: vec![RowChange::Update {
+            schema: "public".to_string(),
+            table: "events".to_string(),
+            key: vec![
+                ("id".to_string(), Some("1".to_string())),
+                ("status".to_string(), Some(old.to_string())),
+            ],
+            row: vec![
+                ("id".to_string(), Some("1".to_string())),
+                ("status".to_string(), Some(new.to_string())),
+            ],
+        }],
+    }
 }
 
 fn update_users_id(id: &str, end_lsn: u64) -> CommittedTransaction {
@@ -128,4 +157,47 @@ fn no_filter_falls_back_to_table_level() {
     versions.advance(&update_users_id("5", 100));
     let table = versions.version_of(&["users".to_string()], &[]);
     assert_eq!(table.0, 100);
+}
+
+#[test]
+fn full_identity_table_anchors_non_pk_equality() {
+    let versions = full_events_versions();
+    versions.advance(&update_event_status("active", "archived", 100));
+    let leaving = versions.version_of(
+        &["events".to_string()],
+        &[("status".to_string(), "active".to_string())],
+    );
+    let entering = versions.version_of(
+        &["events".to_string()],
+        &[("status".to_string(), "archived".to_string())],
+    );
+    let untouched = versions.version_of(
+        &["events".to_string()],
+        &[("status".to_string(), "draft".to_string())],
+    );
+    assert_eq!(leaving.0, 100);
+    assert_eq!(entering.0, 100);
+    assert_eq!(untouched.0, 0);
+}
+
+#[test]
+fn non_full_non_pk_filter_stays_table_level() {
+    let versions = users_versions();
+    versions.advance(&update_users_id("5", 100));
+    let coarse = versions.version_of(
+        &["users".to_string()],
+        &[("status".to_string(), "active".to_string())],
+    );
+    assert_eq!(coarse.0, 100);
+}
+
+#[test]
+fn join_query_stays_table_level() {
+    let versions = users_versions();
+    versions.advance(&update_users_id("5", 100));
+    let joined = versions.version_of(
+        &["users".to_string(), "orders".to_string()],
+        &[("id".to_string(), "7".to_string())],
+    );
+    assert_eq!(joined.0, 100);
 }

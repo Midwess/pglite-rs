@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use pglite::{CommittedTransaction, Lsn, RowChange};
@@ -14,17 +14,20 @@ struct State {
 pub struct VersionIndex {
     state: Arc<RwLock<State>>,
     pk: Arc<HashMap<String, String>>,
+    full: Arc<HashSet<String>>,
 }
 
 impl VersionIndex {
-    pub fn new(pk: HashMap<String, String>) -> VersionIndex {
+    pub fn new(pk: HashMap<String, String>, full: HashSet<String>) -> VersionIndex {
         let pk = pk
             .into_iter()
             .map(|(table, column)| (table.to_ascii_lowercase(), column.to_ascii_lowercase()))
             .collect();
+        let full = full.into_iter().map(|t| t.to_ascii_lowercase()).collect();
         VersionIndex {
             state: Arc::new(RwLock::new(State::default())),
             pk: Arc::new(pk),
+            full: Arc::new(full),
         }
     }
 
@@ -44,6 +47,13 @@ impl VersionIndex {
                         *floor = lsn;
                     }
                 }
+                _ if self.full.contains(&table) => {
+                    for (column, value) in change_columns(change) {
+                        state
+                            .values
+                            .insert((table.clone(), column.to_ascii_lowercase(), value), lsn);
+                    }
+                }
                 _ => {
                     if let Some(pk) = self.pk.get(&table) {
                         for value in pk_values(change, pk) {
@@ -60,16 +70,14 @@ impl VersionIndex {
 
         if tables.len() == 1 {
             let table = tables[0].to_ascii_lowercase();
-            if let Some(pk) = self.pk.get(&table) {
-                if let Some((_, value)) = eq_filters.iter().find(|(column, _)| column == pk) {
-                    let watermark = state
-                        .values
-                        .get(&(table.clone(), pk.clone(), value.clone()))
-                        .copied()
-                        .unwrap_or(0);
-                    let floor = state.structural.get(&table).copied().unwrap_or(0);
-                    return Lsn(watermark.max(floor));
-                }
+            if let Some((column, value)) = eq_filters
+                .iter()
+                .find(|(column, _)| self.is_anchorable(&table, column))
+            {
+                let key = (table.clone(), column.to_ascii_lowercase(), value.clone());
+                let watermark = state.values.get(&key).copied().unwrap_or(0);
+                let floor = state.structural.get(&table).copied().unwrap_or(0);
+                return Lsn(watermark.max(floor));
             }
         }
 
@@ -85,6 +93,13 @@ impl VersionIndex {
         }
         Lsn(max)
     }
+
+    fn is_anchorable(&self, table: &str, column: &str) -> bool {
+        if self.full.contains(table) {
+            return true;
+        }
+        self.pk.get(table).map(|pk| pk == column).unwrap_or(false)
+    }
 }
 
 fn change_table(change: &RowChange) -> &str {
@@ -94,6 +109,27 @@ fn change_table(change: &RowChange) -> &str {
         | RowChange::Delete { table, .. }
         | RowChange::Truncate { table, .. } => table,
     }
+}
+
+fn change_columns(change: &RowChange) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut add = |columns: &[(String, Option<String>)]| {
+        for (column, value) in columns {
+            if let Some(value) = value {
+                out.push((column.clone(), value.clone()));
+            }
+        }
+    };
+    match change {
+        RowChange::Insert { row, .. } => add(row),
+        RowChange::Update { key, row, .. } => {
+            add(key);
+            add(row);
+        }
+        RowChange::Delete { key, .. } => add(key),
+        RowChange::Truncate { .. } => {}
+    }
+    out
 }
 
 fn pk_values(change: &RowChange, pk: &str) -> Vec<String> {
