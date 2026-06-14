@@ -438,6 +438,10 @@ impl PGlite {
     }
 
     pub async fn close(self) -> Result<(), Error> {
+        self.shutdown().await
+    }
+
+    pub async fn shutdown(&self) -> Result<(), Error> {
         #[cfg(all(unix, feature = "socket"))]
         drop(self.gateway.lock().unwrap().take());
         let _guard = self.tx_lock.lock().await;

@@ -18,7 +18,9 @@ pub use error::CacheError;
 
 pub async fn run(config: ServerConfig) -> Result<(), CacheError> {
     Di::init(config).await?;
-    http::server::serve().await
+    let result = http::server::serve().await;
+    Di::instance().shutdown().await;
+    result
 }
 
 pub async fn init(upstream: UpstreamConfig) -> Result<(), CacheError> {

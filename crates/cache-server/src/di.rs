@@ -97,6 +97,12 @@ impl Di {
         INSTANCE.get().expect("dependencies not initialized")
     }
 
+    pub async fn shutdown(&self) {
+        self.replica.stop();
+        self.cdc.stop();
+        let _ = self.db.shutdown().await;
+    }
+
     pub fn db(&self) -> &PGlite {
         &self.db
     }
