@@ -19,6 +19,7 @@ pub(crate) struct TableDef {
     pub name: String,
     pub columns: Vec<ColDef>,
     pub pk: Vec<String>,
+    pub replica_identity: String,
     pub row_filter: Option<String>,
     pub indexes: Vec<String>,
 }
@@ -140,12 +141,14 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
             .map(|t| t.schema != schema || t.name != table)
             .unwrap_or(true)
         {
-            check_replica_identity(schema, table, get(6)?)?;
+            let relreplident = get(6)?;
+            check_replica_identity(schema, table, relreplident)?;
             tables.push(TableDef {
                 schema: schema.to_string(),
                 name: table.to_string(),
                 columns: Vec::new(),
                 pk: Vec::new(),
+                replica_identity: relreplident.to_string(),
                 row_filter: row.get(7).and_then(|v| v.as_deref()).map(str::to_string),
                 indexes: Vec::new(),
             });
@@ -217,10 +220,12 @@ pub(crate) fn introspect(snap: &mut ReplConn, publication: &str) -> Result<Vec<T
     }
 
     for t in &tables {
-        if t.pk.is_empty() {
+        if t.pk.is_empty() && t.replica_identity != "f" {
             return Err(Error::ReplicaConfig(format!(
-                "published table {}.{} has no primary key",
-                t.schema, t.name
+                "published table {schema}.{table} has no primary key and is not REPLICA IDENTITY FULL; \
+                 run ALTER TABLE {schema}.{table} REPLICA IDENTITY FULL so its updates and deletes can be replicated",
+                schema = t.schema,
+                table = t.name
             )));
         }
     }
@@ -273,6 +278,28 @@ pub(crate) fn introspect_enums(
     Ok(enums)
 }
 
+fn create_table_sql(t: &TableDef) -> String {
+    let target = format!("{}.{}", ident(&t.schema), ident(&t.name));
+    let mut defs: Vec<String> = t
+        .columns
+        .iter()
+        .map(|c| {
+            let mut d = format!("{} {}", ident(&c.name), c.type_sql);
+            if c.not_null {
+                d.push_str(" NOT NULL");
+            }
+            d
+        })
+        .collect();
+    if !t.pk.is_empty() {
+        defs.push(format!(
+            "PRIMARY KEY ({})",
+            t.pk.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    format!("CREATE TABLE {target} ({})", defs.join(", "))
+}
+
 pub(crate) fn bootstrap_schema(
     db: &PGlite,
     enums: &[EnumDef],
@@ -287,7 +314,12 @@ pub(crate) fn bootstrap_schema(
             let target = format!("{}.{}", ident(&e.schema), ident(&e.name));
             db.exec(&format!("DROP TYPE IF EXISTS {target} CASCADE"))
                 .await?;
-            let labels = e.labels.iter().map(|l| lit(l)).collect::<Vec<_>>().join(", ");
+            let labels = e
+                .labels
+                .iter()
+                .map(|l| lit(l))
+                .collect::<Vec<_>>()
+                .join(", ");
             db.exec(&format!("CREATE TYPE {target} AS ENUM ({labels})"))
                 .await?;
         }
@@ -299,23 +331,7 @@ pub(crate) fn bootstrap_schema(
             let target = format!("{}.{}", ident(&t.schema), ident(&t.name));
             db.exec(&format!("DROP TABLE IF EXISTS {target} CASCADE"))
                 .await?;
-            let mut defs: Vec<String> = t
-                .columns
-                .iter()
-                .map(|c| {
-                    let mut d = format!("{} {}", ident(&c.name), c.type_sql);
-                    if c.not_null {
-                        d.push_str(" NOT NULL");
-                    }
-                    d
-                })
-                .collect();
-            defs.push(format!(
-                "PRIMARY KEY ({})",
-                t.pk.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ")
-            ));
-            db.exec(&format!("CREATE TABLE {target} ({})", defs.join(", ")))
-                .await?;
+            db.exec(&create_table_sql(t)).await?;
             for index in &t.indexes {
                 db.query(index, &[]).await?;
             }
@@ -393,6 +409,41 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("update"), "{err}");
+    }
+
+    fn tdef(pk: Vec<&str>, replica_identity: &str) -> TableDef {
+        TableDef {
+            schema: "public".into(),
+            name: "t".into(),
+            columns: vec![ColDef {
+                name: "id".into(),
+                type_sql: "integer".into(),
+                type_oid: 23,
+                not_null: true,
+            }],
+            pk: pk.into_iter().map(String::from).collect(),
+            replica_identity: replica_identity.into(),
+            row_filter: None,
+            indexes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn create_table_sql_includes_pk() {
+        let sql = create_table_sql(&tdef(vec!["id"], "d"));
+        assert_eq!(
+            sql,
+            "CREATE TABLE \"public\".\"t\" (\"id\" integer NOT NULL, PRIMARY KEY (\"id\"))"
+        );
+    }
+
+    #[test]
+    fn create_table_sql_omits_pk_for_full_identity_no_pk() {
+        let sql = create_table_sql(&tdef(vec![], "f"));
+        assert_eq!(
+            sql,
+            "CREATE TABLE \"public\".\"t\" (\"id\" integer NOT NULL)"
+        );
     }
 
     #[test]
