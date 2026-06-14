@@ -7,6 +7,7 @@ mod error;
 mod http;
 mod live;
 mod rows;
+mod setup;
 mod shapelog;
 mod version;
 
@@ -19,4 +20,8 @@ pub use error::CacheError;
 pub async fn run(config: ServerConfig) -> Result<(), CacheError> {
     Di::init(config).await?;
     http::server::serve().await
+}
+
+pub async fn init(upstream: UpstreamConfig) -> Result<(), CacheError> {
+    setup::prepare(&upstream).await
 }

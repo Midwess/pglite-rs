@@ -15,9 +15,11 @@ path = "src/main.rs"
 
 [dependencies]
 pglite-rs = { path = "../pglite", features = ["replica", "multiple-process"] }
+clap = { version = "4", features = ["derive", "env"] }
 actix-web = "4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-stream = "0.1"
+tokio-postgres = "0.7"
 sqlparser = { version = "0.52", features = ["visitor"] }
 moka = { version = "0.12", features = ["future"] }
 serde = { version = "1", features = ["derive"] }

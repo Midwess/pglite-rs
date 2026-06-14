@@ -23,7 +23,7 @@ pub struct UpstreamConfig {
     pub database: String,
     pub publication: String,
     pub slot: String,
-    pub sslmode: SslMode,
+    pub sslmode: String,
 }
 
 pub struct ServerConfig {
@@ -32,27 +32,6 @@ pub struct ServerConfig {
     pub max_connections: usize,
     pub cache_size_bytes: u64,
     pub upstream: UpstreamConfig,
-}
-
-impl ServerConfig {
-    pub fn from_env() -> Result<ServerConfig, CacheError> {
-        Ok(ServerConfig {
-            bind_addr: env_or("CACHE_BIND_ADDR", "127.0.0.1:8080"),
-            data_dir: PathBuf::from(env_or("CACHE_DATA_DIR", "./cache-data")),
-            max_connections: env_parse("CACHE_MAX_CONNECTIONS", 8)?,
-            cache_size_bytes: env_parse("CACHE_SIZE_BYTES", 268_435_456)?,
-            upstream: UpstreamConfig {
-                host: env_or("UPSTREAM_HOST", "127.0.0.1"),
-                port: env_parse("UPSTREAM_PORT", 5432)?,
-                user: env_or("UPSTREAM_USER", "postgres"),
-                password: env_or("UPSTREAM_PASSWORD", ""),
-                database: env_or("UPSTREAM_DATABASE", "postgres"),
-                publication: env_required("UPSTREAM_PUBLICATION")?,
-                slot: env_required("UPSTREAM_SLOT")?,
-                sslmode: parse_sslmode(&env_or("UPSTREAM_SSLMODE", "disable")),
-            },
-        })
-    }
 }
 
 pub struct Di {
@@ -71,6 +50,8 @@ pub struct Di {
 
 impl Di {
     pub async fn init(config: ServerConfig) -> Result<(), CacheError> {
+        crate::setup::preflight(&config.upstream).await?;
+
         let options = MultiProcessOptions {
             max_connections: config.max_connections,
             ..Default::default()
@@ -85,7 +66,7 @@ impl Di {
             database: config.upstream.database.clone(),
             publication: config.upstream.publication.clone(),
             slot_name: config.upstream.slot.clone(),
-            sslmode: config.upstream.sslmode,
+            sslmode: parse_sslmode(&config.upstream.sslmode),
             ..Default::default()
         };
         let replica = Replica::start(db.clone(), replica_config).await?;
@@ -215,26 +196,6 @@ async fn scan_schema(
     }
 
     Ok((tables, pk, full))
-}
-
-fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
-
-fn env_required(key: &str) -> Result<String, CacheError> {
-    std::env::var(key).map_err(|_| CacheError::Config(format!("{key} is required")))
-}
-
-fn env_parse<T>(key: &str, default: T) -> Result<T, CacheError>
-where
-    T: std::str::FromStr,
-{
-    match std::env::var(key) {
-        Ok(value) => value
-            .parse::<T>()
-            .map_err(|_| CacheError::Config(format!("{key} is invalid"))),
-        Err(_) => Ok(default),
-    }
 }
 
 fn parse_sslmode(value: &str) -> SslMode {
