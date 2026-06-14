@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/pglite-sys",
     "crates/pglite",
-    "crates/cache-server",
     "crates/lib-aarch64-apple-darwin",
     "crates/lib-x86_64-apple-darwin",
     "crates/lib-x86_64-unknown-linux-gnu",
