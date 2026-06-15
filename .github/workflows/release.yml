@@ -100,9 +100,8 @@ jobs:
           OUT=native/out
           for f in "$PREFIX/bin/initdb.exe" "$PREFIX/bin/postgres.exe" "$PREFIX/lib/postgresql/libpqwalreceiver.dll"; do
             [ -f "$f" ] || continue
-            ldd "$f" | awk '{print $3}' | grep -iE "/(ucrt64|mingw64|clang64)/" | while read -r dll; do
-              [ -f "$dll" ] && cp -n "$dll" "$PREFIX/bin/"
-            done
+            deps="$(ldd "$f" 2>/dev/null | awk '{print $3}' | grep -iE '/(ucrt64|mingw64|clang64)/' || true)"
+            for dll in $deps; do [ -f "$dll" ] && cp -n "$dll" "$PREFIX/bin/"; done
           done
           DLLS="$(cd "$PREFIX" && ls bin/*.dll | tr '\n' ' ')"
           tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" \
