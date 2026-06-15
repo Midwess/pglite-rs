@@ -47,6 +47,9 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
 
+      - name: Reset submodule for clean ICU patch apply
+        run: git -C postgres-pglite reset --hard
+
       - name: Build ICU variant
         run: WITH_ICU=1 ./native/build-libpglite.sh
 
