@@ -112,30 +112,7 @@ else
 fi
 
 EXE=""
-RUNTIME_LIBS=""
-case "$(uname)" in
-  MINGW*|MSYS*)
-    EXE=".exe"
-    for f in "$PREFIX/bin/initdb.exe" "$PREFIX/bin/postgres.exe" "$PREFIX/lib/postgresql/libpqwalreceiver.dll"; do
-      [ -f "$f" ] || continue
-      ldd "$f" | awk '{print $3}' | grep -iE "/(mingw|ucrt|clang)[0-9]*/" | while read -r dll; do
-        [ -f "$dll" ] && cp -n "$dll" "$PREFIX/bin/"
-      done
-    done
-    RUNTIME_LIBS="$(cd "$PREFIX" && ls bin/*.dll 2>/dev/null | tr '\n' ' ')"
-    ;;
-  Darwin)
-    install_name_tool -id "@rpath/libpq.5.dylib" "$PREFIX/lib/libpq.5.dylib"
-    install_name_tool -change "$PREFIX/lib/libpq.5.dylib" "@loader_path/../lib/libpq.5.dylib" "$PREFIX/bin/initdb"
-    install_name_tool -change "$PREFIX/lib/libpq.5.dylib" "@loader_path/../libpq.5.dylib" "$PREFIX/lib/postgresql/libpqwalreceiver.dylib"
-    codesign -f -s - "$PREFIX/lib/libpq.5.dylib" "$PREFIX/bin/initdb" "$PREFIX/lib/postgresql/libpqwalreceiver.dylib"
-    RUNTIME_LIBS="lib/libpq.5.dylib"
-    ;;
-  Linux)
-    patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN/..' "$PREFIX/bin/initdb" "$PREFIX/bin/postgres" "$PREFIX/lib/postgresql/libpqwalreceiver.so"
-    RUNTIME_LIBS="$(cd "$PREFIX" && ls lib/libpq.so* 2>/dev/null | tr '\n' ' ')"
-    ;;
-esac
-tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" share/postgresql lib/postgresql "bin/initdb$EXE" "bin/postgres$EXE" $RUNTIME_LIBS
+case "$(uname)" in MINGW*|MSYS*) EXE=".exe" ;; esac
+tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" share/postgresql lib/postgresql "bin/initdb$EXE" "bin/postgres$EXE"
 
 ls -lh "$OUT/libpglite.a" "$OUT/pglite-runtime.tar"

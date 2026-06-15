@@ -69,6 +69,25 @@ jobs:
         shell: msys2 {0}
         run: CC=gcc ./native/build-libpglite.sh
 
+      - name: Relocate runtime libs (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          PREFIX=native/out/install
+          OUT=native/out
+          if [ "$(uname)" = "Darwin" ]; then
+            install_name_tool -id "@rpath/libpq.5.dylib" "$PREFIX/lib/libpq.5.dylib"
+            install_name_tool -change "$PREFIX/lib/libpq.5.dylib" "@loader_path/../lib/libpq.5.dylib" "$PREFIX/bin/initdb"
+            install_name_tool -change "$PREFIX/lib/libpq.5.dylib" "@loader_path/../libpq.5.dylib" "$PREFIX/lib/postgresql/libpqwalreceiver.dylib"
+            codesign -f -s - "$PREFIX/lib/libpq.5.dylib" "$PREFIX/bin/initdb" "$PREFIX/lib/postgresql/libpqwalreceiver.dylib"
+            LIBS="lib/libpq.5.dylib"
+          else
+            patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN/..' "$PREFIX/bin/initdb" "$PREFIX/bin/postgres" "$PREFIX/lib/postgresql/libpqwalreceiver.so"
+            LIBS="$(cd "$PREFIX" && ls lib/libpq.so* | tr '\n' ' ')"
+          fi
+          tar -C "$PREFIX" --exclude lib/postgresql/pgxs -cf "$OUT/pglite-runtime.tar" \
+            share/postgresql lib/postgresql bin/initdb bin/postgres $LIBS
+
       - name: Build extensions (Unix)
         if: runner.os != 'Windows'
         run: ./native/build-extensions.sh pgcrypto pgvector

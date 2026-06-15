@@ -20,7 +20,7 @@ jobs:
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev
 
       - name: Cache engine build
         uses: actions/cache@v4
@@ -81,7 +81,7 @@ jobs:
           submodules: true
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev patchelf postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev postgresql-client
 
       - name: Enable logical replication on the service container
         run: |
