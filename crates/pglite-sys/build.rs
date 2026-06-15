@@ -2,7 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const ENGINE_TAG: &str = "engine-06c837c6a303-p2";
+const ENGINE_TAG: &str = "engine-06c837c6a303-p3";
 const RELEASE_BASE: &str = "https://github.com/Midwess/pglite-rs/releases/download";
 
 fn main() {

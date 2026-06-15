@@ -30,7 +30,7 @@ jobs:
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev libicu-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y bison flex zlib1g-dev libssl-dev patchelf libicu-dev pkg-config
 
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
@@ -39,6 +39,9 @@ jobs:
       - name: Build libpglite
         run: ./native/build-libpglite.sh
 
+      - name: Relocate base runtime
+        run: ./native/relocate-runtime.sh native/out
+
       - name: Build extensions
         run: ./native/build-extensions.sh pgcrypto pgvector
         env:
@@ -46,6 +49,9 @@ jobs:
 
       - name: Build ICU variant
         run: WITH_ICU=1 ./native/build-libpglite.sh
+
+      - name: Relocate ICU runtime
+        run: ./native/relocate-runtime.sh native/out/icu
 
       - name: Package artifacts
         run: |

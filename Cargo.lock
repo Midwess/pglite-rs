@@ -849,7 +849,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pglite-examples"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "futures",
  "pglite-rs",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "pglite-rs"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -879,27 +879,27 @@ dependencies = [
 
 [[package]]
 name = "pglite-rs-lib-aarch64-apple-darwin"
-version = "0.2.4"
+version = "0.2.5"
 
 [[package]]
 name = "pglite-rs-lib-aarch64-unknown-linux-gnu"
-version = "0.2.4"
+version = "0.2.5"
 
 [[package]]
 name = "pglite-rs-lib-x86_64-apple-darwin"
-version = "0.2.4"
+version = "0.2.5"
 
 [[package]]
 name = "pglite-rs-lib-x86_64-pc-windows-gnu"
-version = "0.2.4"
+version = "0.2.5"
 
 [[package]]
 name = "pglite-rs-lib-x86_64-unknown-linux-gnu"
-version = "0.2.4"
+version = "0.2.5"
 
 [[package]]
 name = "pglite-rs-sys"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "libc",
  "pglite-rs-lib-aarch64-apple-darwin",
