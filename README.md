@@ -8,9 +8,13 @@
 
 Built on [postgres-pglite](https://github.com/electric-sql/postgres-pglite), a single-process PostgreSQL fork, compiled natively and linked straight into your binary. No server, no Docker, no install step.
 
+[![Crates.io](https://img.shields.io/crates/v/pglite-rs)](https://crates.io/crates/pglite-rs)
+[![docs.rs](https://img.shields.io/docsrs/pglite-rs)](https://docs.rs/pglite-rs)
+[![Crates.io downloads](https://img.shields.io/crates/d/pglite-rs)](https://crates.io/crates/pglite-rs)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust: 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](rust-toolchain.toml)
 [![Edition: 2021](https://img.shields.io/badge/edition-2021-orange.svg)](Cargo.toml)
+[![Repo](https://img.shields.io/badge/repo-Midwess%2Fpglite--rs-blue)](https://github.com/Midwess/pglite-rs)
 
 ## Table of Contents
 
@@ -41,8 +45,8 @@ The numbers below are measured, not estimated — each example program in [`exam
 
 | Mode | Steady-state RSS | Peak RSS (during init) |
 | --- | --- | --- |
-| Single in-process backend (`open_temp`) | **~34 MB** | ~48 MB |
-| Multi-process pool, 4 live connections (`open_multi_process`) | ~101 MB across 15 processes¹ | ~101 MB |
+| Single in-process backend (`open_temp`) | **~23 MB** | ~29 MB |
+| Multi-process pool, 4 live connections (`open_multi_process`) | ~84 MB across 12 processes¹ | ~84 MB |
 
 A single embedded backend adds little to your process beyond Postgres's own shared buffers; the shared memory is emulated on the heap and released when the engine closes, and there are no idle worker processes sitting resident. That makes it practical to embed in CLIs, desktop apps, tests, and edge/serverless workloads where a full Postgres server would be too heavy.
 

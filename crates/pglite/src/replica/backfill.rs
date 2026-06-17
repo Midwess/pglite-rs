@@ -883,6 +883,358 @@ pub(crate) fn apply_schema_delta(
     Ok(new_tables)
 }
 
+pub(crate) struct RoleDef {
+    pub name: String,
+    pub inherit: bool,
+}
+
+pub(crate) struct Membership {
+    pub grp: String,
+    pub member: String,
+    pub admin: bool,
+}
+
+pub(crate) struct RlsFlag {
+    pub schema: String,
+    pub table: String,
+    pub enabled: bool,
+    pub forced: bool,
+}
+
+pub(crate) struct TableGrant {
+    pub schema: String,
+    pub table: String,
+    pub grantee: String,
+}
+
+pub(crate) struct PolicyDef {
+    pub schema: String,
+    pub table: String,
+    pub name: String,
+    pub permissive: bool,
+    pub cmd: String,
+    pub roles: Vec<String>,
+    pub using: Option<String>,
+    pub check: Option<String>,
+}
+
+pub(crate) struct SecurityCatalog {
+    pub roles: Vec<RoleDef>,
+    pub memberships: Vec<Membership>,
+    pub tables: Vec<RlsFlag>,
+    pub grants: Vec<TableGrant>,
+    pub policies: Vec<PolicyDef>,
+}
+
+pub(crate) fn introspect_security(
+    snap: &mut ReplConn,
+    publication: &str,
+) -> Result<SecurityCatalog, Error> {
+    let pub_lit = lit(publication);
+
+    let role_rows = snap.simple_query(
+        "SELECT rolname::text, rolinherit::int FROM pg_roles WHERE oid >= 16384 ORDER BY rolname",
+    )?;
+    let mut roles = Vec::with_capacity(role_rows.len());
+    for row in &role_rows {
+        let cell = |i: usize| row.get(i).and_then(|v| v.as_deref());
+        roles.push(RoleDef {
+            name: cell(0).unwrap_or_default().to_string(),
+            inherit: cell(1) == Some("1"),
+        });
+    }
+
+    let member_rows = snap.simple_query(
+        "SELECT g.rolname::text, m.rolname::text, am.admin_option::int \
+         FROM pg_auth_members am \
+         JOIN pg_roles g ON g.oid = am.roleid \
+         JOIN pg_roles m ON m.oid = am.member \
+         WHERE g.oid >= 16384 AND m.oid >= 16384 \
+         ORDER BY 1, 2",
+    )?;
+    let mut memberships = Vec::with_capacity(member_rows.len());
+    for row in &member_rows {
+        let cell = |i: usize| row.get(i).and_then(|v| v.as_deref());
+        memberships.push(Membership {
+            grp: cell(0).unwrap_or_default().to_string(),
+            member: cell(1).unwrap_or_default().to_string(),
+            admin: cell(2) == Some("1"),
+        });
+    }
+
+    let table_rows = snap.simple_query(&format!(
+        "SELECT n.nspname::text, c.relname::text, c.relrowsecurity::int, c.relforcerowsecurity::int \
+         FROM pg_publication_tables pt \
+         JOIN pg_namespace n ON n.nspname = pt.schemaname \
+         JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename \
+         WHERE pt.pubname = {pub_lit} \
+         ORDER BY 1, 2"
+    ))?;
+    let mut tables = Vec::with_capacity(table_rows.len());
+    for row in &table_rows {
+        let cell = |i: usize| row.get(i).and_then(|v| v.as_deref());
+        tables.push(RlsFlag {
+            schema: cell(0).unwrap_or_default().to_string(),
+            table: cell(1).unwrap_or_default().to_string(),
+            enabled: cell(2) == Some("1"),
+            forced: cell(3) == Some("1"),
+        });
+    }
+
+    let grant_rows = snap.simple_query(&format!(
+        "SELECT g.table_schema::text, g.table_name::text, g.grantee::text \
+         FROM information_schema.role_table_grants g \
+         JOIN pg_publication_tables pt ON pt.schemaname = g.table_schema AND pt.tablename = g.table_name \
+         WHERE pt.pubname = {pub_lit} AND g.privilege_type = 'SELECT' \
+           AND (g.grantee = 'PUBLIC' OR g.grantee IN (SELECT rolname FROM pg_roles WHERE oid >= 16384)) \
+         ORDER BY 1, 2, 3"
+    ))?;
+    let mut grants = Vec::with_capacity(grant_rows.len());
+    for row in &grant_rows {
+        let cell = |i: usize| row.get(i).and_then(|v| v.as_deref());
+        grants.push(TableGrant {
+            schema: cell(0).unwrap_or_default().to_string(),
+            table: cell(1).unwrap_or_default().to_string(),
+            grantee: cell(2).unwrap_or_default().to_string(),
+        });
+    }
+
+    let policy_rows = snap.simple_query(&format!(
+        "SELECT p.schemaname::text, p.tablename::text, p.policyname::text, \
+                (p.permissive = 'PERMISSIVE')::int, p.cmd::text, \
+                array_to_string(p.roles, ',')::text, p.qual::text, p.with_check::text \
+         FROM pg_policies p \
+         JOIN pg_publication_tables pt ON pt.schemaname = p.schemaname AND pt.tablename = p.tablename \
+         WHERE pt.pubname = {pub_lit} \
+         ORDER BY 1, 2, 3"
+    ))?;
+    let mut policies = Vec::with_capacity(policy_rows.len());
+    for row in &policy_rows {
+        let cell = |i: usize| row.get(i).and_then(|v| v.as_deref());
+        let roles = cell(5)
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        policies.push(PolicyDef {
+            schema: cell(0).unwrap_or_default().to_string(),
+            table: cell(1).unwrap_or_default().to_string(),
+            name: cell(2).unwrap_or_default().to_string(),
+            permissive: cell(3) == Some("1"),
+            cmd: cell(4).unwrap_or_default().to_string(),
+            roles,
+            using: cell(6).map(str::to_string),
+            check: cell(7).map(str::to_string),
+        });
+    }
+
+    Ok(SecurityCatalog {
+        roles,
+        memberships,
+        tables,
+        grants,
+        policies,
+    })
+}
+
+pub(crate) fn security_fingerprint(sec: &SecurityCatalog) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for r in &sec.roles {
+        lines.push(format!("role|{}|{}", r.name, r.inherit as u8));
+    }
+    for m in &sec.memberships {
+        lines.push(format!("member|{}|{}|{}", m.grp, m.member, m.admin as u8));
+    }
+    for t in &sec.tables {
+        lines.push(format!(
+            "rls|{}|{}|{}|{}",
+            t.schema, t.table, t.enabled as u8, t.forced as u8
+        ));
+    }
+    for g in &sec.grants {
+        lines.push(format!("grant|{}|{}|{}", g.schema, g.table, g.grantee));
+    }
+    for p in &sec.policies {
+        lines.push(format!(
+            "policy|{}|{}|{}|{}|{}|{}|{}|{}",
+            p.schema,
+            p.table,
+            p.name,
+            p.permissive as u8,
+            p.cmd,
+            p.roles.join(","),
+            p.using.as_deref().unwrap_or(""),
+            p.check.as_deref().unwrap_or("")
+        ));
+    }
+    lines.sort();
+    lines.join("\n")
+}
+
+fn create_policy_sql(p: &PolicyDef, target: &str) -> String {
+    let kind = if p.permissive {
+        "PERMISSIVE"
+    } else {
+        "RESTRICTIVE"
+    };
+    let roles = if p.roles.iter().any(|r| r == "public") {
+        "PUBLIC".to_string()
+    } else {
+        p.roles
+            .iter()
+            .map(|r| ident(r))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut sql = format!(
+        "CREATE POLICY {} ON {target} AS {kind} FOR {} TO {roles}",
+        ident(&p.name),
+        p.cmd
+    );
+    if let Some(using) = &p.using {
+        sql.push_str(&format!(" USING ({using})"));
+    }
+    if let Some(check) = &p.check {
+        sql.push_str(&format!(" WITH CHECK ({check})"));
+    }
+    sql
+}
+
+pub(crate) fn reconcile_security(db: &PGlite, sec: &SecurityCatalog) -> Result<(), Error> {
+    block_on(async {
+        let existing_roles = db
+            .query("SELECT rolname FROM pg_roles WHERE oid >= 16384", &[])
+            .await?;
+        let mut have: Vec<String> = Vec::with_capacity(existing_roles.len());
+        for row in &existing_roles {
+            have.push(row.get::<&str>(0)?.to_string());
+        }
+        for r in &sec.roles {
+            if !have.iter().any(|n| n == &r.name) {
+                db.query(
+                    &format!("CREATE ROLE {} NOLOGIN NOBYPASSRLS", ident(&r.name)),
+                    &[],
+                )
+                .await?;
+            }
+            let inherit = if r.inherit { "INHERIT" } else { "NOINHERIT" };
+            db.query(
+                &format!(
+                    "ALTER ROLE {} WITH NOLOGIN NOBYPASSRLS {inherit}",
+                    ident(&r.name)
+                ),
+                &[],
+            )
+            .await?;
+        }
+        for r in &sec.roles {
+            if !have.iter().any(|n| n == &r.name) {
+                have.push(r.name.clone());
+            }
+        }
+
+        let local_members = db
+            .query(
+                "SELECT g.rolname, m.rolname FROM pg_auth_members am \
+                 JOIN pg_roles g ON g.oid = am.roleid JOIN pg_roles m ON m.oid = am.member \
+                 WHERE g.oid >= 16384 AND m.oid >= 16384",
+                &[],
+            )
+            .await?;
+        for row in &local_members {
+            let grp = row.get::<&str>(0)?;
+            let member = row.get::<&str>(1)?;
+            db.query(
+                &format!("REVOKE {} FROM {}", ident(grp), ident(member)),
+                &[],
+            )
+            .await?;
+        }
+        for m in &sec.memberships {
+            let admin = if m.admin { " WITH ADMIN OPTION" } else { "" };
+            db.query(
+                &format!("GRANT {} TO {}{admin}", ident(&m.grp), ident(&m.member)),
+                &[],
+            )
+            .await?;
+        }
+
+        for t in &sec.tables {
+            let target = format!("{}.{}", ident(&t.schema), ident(&t.table));
+            if t.enabled {
+                db.query(
+                    &format!("ALTER TABLE {target} ENABLE ROW LEVEL SECURITY"),
+                    &[],
+                )
+                .await?;
+                db.query(
+                    &format!("ALTER TABLE {target} FORCE ROW LEVEL SECURITY"),
+                    &[],
+                )
+                .await?;
+            } else {
+                db.query(
+                    &format!("ALTER TABLE {target} NO FORCE ROW LEVEL SECURITY"),
+                    &[],
+                )
+                .await?;
+                db.query(
+                    &format!("ALTER TABLE {target} DISABLE ROW LEVEL SECURITY"),
+                    &[],
+                )
+                .await?;
+            }
+
+            db.query(&format!("REVOKE SELECT ON {target} FROM PUBLIC"), &[])
+                .await?;
+            for name in &have {
+                db.query(
+                    &format!("REVOKE SELECT ON {target} FROM {}", ident(name)),
+                    &[],
+                )
+                .await?;
+            }
+            for g in sec
+                .grants
+                .iter()
+                .filter(|g| g.schema == t.schema && g.table == t.table)
+            {
+                let grantee = if g.grantee == "PUBLIC" {
+                    "PUBLIC".to_string()
+                } else {
+                    ident(&g.grantee)
+                };
+                db.query(&format!("GRANT SELECT ON {target} TO {grantee}"), &[])
+                    .await?;
+            }
+
+            let existing = db
+                .query(
+                    "SELECT policyname FROM pg_policies WHERE schemaname = $1 AND tablename = $2",
+                    &[&t.schema, &t.table],
+                )
+                .await?;
+            for row in &existing {
+                let pol = row.get::<&str>(0)?;
+                db.query(
+                    &format!("DROP POLICY IF EXISTS {} ON {target}", ident(pol)),
+                    &[],
+                )
+                .await?;
+            }
+            for p in sec
+                .policies
+                .iter()
+                .filter(|p| p.schema == t.schema && p.table == t.table)
+            {
+                db.query(&create_policy_sql(p, &target), &[]).await?;
+            }
+        }
+        Ok::<(), Error>(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1094,5 +1446,195 @@ mod tests {
             .to_string();
         assert!(err.contains("REPLICA IDENTITY NOTHING"), "{err}");
         assert!(err.contains("public.t"), "{err}");
+    }
+
+    #[test]
+    fn create_policy_sql_permissive_with_using() {
+        let p = PolicyDef {
+            schema: "public".into(),
+            table: "orders".into(),
+            name: "p_org".into(),
+            permissive: true,
+            cmd: "SELECT".into(),
+            roles: vec!["authenticated".into()],
+            using: Some("org_id = 7".into()),
+            check: None,
+        };
+        let target = format!("{}.{}", ident("public"), ident("orders"));
+        assert_eq!(
+            create_policy_sql(&p, &target),
+            "CREATE POLICY \"p_org\" ON \"public\".\"orders\" AS PERMISSIVE FOR SELECT TO \"authenticated\" USING (org_id = 7)"
+        );
+    }
+
+    #[test]
+    fn create_policy_sql_restrictive_public_with_check() {
+        let p = PolicyDef {
+            schema: "public".into(),
+            table: "orders".into(),
+            name: "p_all".into(),
+            permissive: false,
+            cmd: "ALL".into(),
+            roles: vec!["public".into()],
+            using: Some("true".into()),
+            check: Some("amount > 0".into()),
+        };
+        let target = format!("{}.{}", ident("public"), ident("orders"));
+        assert_eq!(
+            create_policy_sql(&p, &target),
+            "CREATE POLICY \"p_all\" ON \"public\".\"orders\" AS RESTRICTIVE FOR ALL TO PUBLIC USING (true) WITH CHECK (amount > 0)"
+        );
+    }
+
+    #[test]
+    fn security_fingerprint_is_order_independent() {
+        let a = SecurityCatalog {
+            roles: vec![
+                RoleDef {
+                    name: "authenticated".into(),
+                    inherit: true,
+                },
+                RoleDef {
+                    name: "anon".into(),
+                    inherit: false,
+                },
+            ],
+            memberships: Vec::new(),
+            tables: vec![RlsFlag {
+                schema: "public".into(),
+                table: "orders".into(),
+                enabled: true,
+                forced: true,
+            }],
+            grants: vec![TableGrant {
+                schema: "public".into(),
+                table: "orders".into(),
+                grantee: "authenticated".into(),
+            }],
+            policies: Vec::new(),
+        };
+        let b = SecurityCatalog {
+            roles: vec![
+                RoleDef {
+                    name: "anon".into(),
+                    inherit: false,
+                },
+                RoleDef {
+                    name: "authenticated".into(),
+                    inherit: true,
+                },
+            ],
+            memberships: Vec::new(),
+            tables: a
+                .tables
+                .iter()
+                .map(|t| RlsFlag {
+                    schema: t.schema.clone(),
+                    table: t.table.clone(),
+                    enabled: t.enabled,
+                    forced: t.forced,
+                })
+                .collect(),
+            grants: a
+                .grants
+                .iter()
+                .map(|g| TableGrant {
+                    schema: g.schema.clone(),
+                    table: g.table.clone(),
+                    grantee: g.grantee.clone(),
+                })
+                .collect(),
+            policies: Vec::new(),
+        };
+        assert_eq!(security_fingerprint(&a), security_fingerprint(&b));
+        assert!(security_fingerprint(&a).contains("rls|public|orders|1|1"));
+
+        let mut c = b;
+        c.roles[0].inherit = true;
+        assert_ne!(security_fingerprint(&a), security_fingerprint(&c));
+    }
+
+    fn sample_catalog() -> SecurityCatalog {
+        SecurityCatalog {
+            roles: vec![RoleDef {
+                name: "r".into(),
+                inherit: true,
+            }],
+            memberships: vec![Membership {
+                grp: "g".into(),
+                member: "r".into(),
+                admin: false,
+            }],
+            tables: vec![RlsFlag {
+                schema: "public".into(),
+                table: "t".into(),
+                enabled: true,
+                forced: true,
+            }],
+            grants: vec![TableGrant {
+                schema: "public".into(),
+                table: "t".into(),
+                grantee: "r".into(),
+            }],
+            policies: vec![PolicyDef {
+                schema: "public".into(),
+                table: "t".into(),
+                name: "p".into(),
+                permissive: true,
+                cmd: "SELECT".into(),
+                roles: vec!["r".into()],
+                using: Some("a = 1".into()),
+                check: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn security_fingerprint_detects_each_dimension() {
+        let base = security_fingerprint(&sample_catalog());
+
+        let mut grantee = sample_catalog();
+        grantee.grants[0].grantee = "other".into();
+        assert_ne!(security_fingerprint(&grantee), base, "grantee change");
+
+        let mut admin = sample_catalog();
+        admin.memberships[0].admin = true;
+        assert_ne!(security_fingerprint(&admin), base, "admin-option change");
+
+        let mut forced = sample_catalog();
+        forced.tables[0].forced = false;
+        assert_ne!(security_fingerprint(&forced), base, "force-rls change");
+
+        let mut using = sample_catalog();
+        using.policies[0].using = Some("a = 2".into());
+        assert_ne!(security_fingerprint(&using), base, "policy USING change");
+
+        let mut permissive = sample_catalog();
+        permissive.policies[0].permissive = false;
+        assert_ne!(security_fingerprint(&permissive), base, "permissive change");
+
+        let mut dropped = sample_catalog();
+        dropped.policies.clear();
+        assert_ne!(security_fingerprint(&dropped), base, "policy removed");
+    }
+
+    #[test]
+    fn create_policy_sql_escapes_each_role() {
+        let p = PolicyDef {
+            schema: "public".into(),
+            table: "t".into(),
+            name: "p".into(),
+            permissive: true,
+            cmd: "SELECT".into(),
+            roles: vec!["we\"ird".into(), "a,b".into()],
+            using: None,
+            check: None,
+        };
+        let target = format!("{}.{}", ident("public"), ident("t"));
+        let sql = create_policy_sql(&p, &target);
+        assert!(
+            sql.contains("TO \"we\"\"ird\", \"a,b\""),
+            "each role quoted; a comma in a name cannot inject a second role: {sql}"
+        );
     }
 }

@@ -14,9 +14,11 @@ use futures::executor::block_on;
 
 use crate::db::PGlite;
 use crate::error::Error;
+use crate::row::Row;
 pub use meta::Lsn;
 use meta::ReplicaState;
 use pgoutput::{CellValue, PgOutputMsg, RelColumn, TupleData};
+use postgres_types::ToSql;
 use wire::{ReplConn, ReplMsg};
 
 pub const DDL_SIGNAL_PREFIX: &str = "pglite_ddl";
@@ -65,6 +67,7 @@ pub struct ReplicaConfig {
     pub application_name: String,
     pub read_timeout: Duration,
     pub status_interval: Duration,
+    pub role_poll_interval: Duration,
     pub sslmode: SslMode,
 }
 
@@ -81,6 +84,7 @@ impl Default for ReplicaConfig {
             application_name: "pglite-replica".into(),
             read_timeout: Duration::from_secs(5),
             status_interval: Duration::from_secs(10),
+            role_poll_interval: Duration::from_secs(60),
             sslmode: SslMode::Disable,
         }
     }
@@ -427,6 +431,10 @@ impl Replica {
         rx
     }
 
+    pub async fn security_version(&self) -> Result<u64, Error> {
+        meta::security_version(&self.db).await
+    }
+
     fn thread_main(self, state: Option<ReplicaState>, boot_tx: oneshot::Sender<Result<(), Error>>) {
         match self.prepare(state) {
             Ok((conn, start, fingerprint)) => {
@@ -635,6 +643,9 @@ impl Replica {
         let fingerprint = backfill::fingerprint(&tables);
         backfill::bootstrap_schema(&self.db, &types, &tables)?;
         backfill::copy_tables(&mut snap, &self.db, &tables)?;
+        let security = backfill::introspect_security(&mut snap, &self.config.publication)?;
+        backfill::reconcile_security(&self.db, &security)?;
+        let security_fp = backfill::security_fingerprint(&security);
         snap.simple_query("COMMIT")?;
         snap.terminate();
 
@@ -645,6 +656,7 @@ impl Replica {
             consistent_point,
             &fingerprint,
         ))?;
+        block_on(meta::bump_security(&self.db, &security_fp))?;
         Ok((conn, consistent_point, fingerprint))
     }
 
@@ -672,6 +684,7 @@ impl Replica {
         conn.set_stream_timeout(read_timeout)?;
         conn.send_status(self.feedback_lsn(), false)?;
         let mut last_status = Instant::now();
+        let mut last_role_poll = Instant::now();
 
         let mut expected: HashMap<(String, String), String> = HashMap::new();
         for line in fingerprint.lines() {
@@ -691,6 +704,10 @@ impl Replica {
             if last_status.elapsed() >= cadence {
                 conn.send_status(self.feedback_lsn(), false)?;
                 last_status = Instant::now();
+            }
+            if last_role_poll.elapsed() >= self.config.role_poll_interval {
+                self.resync_security()?;
+                last_role_poll = Instant::now();
             }
 
             let Some(msg) = conn
@@ -863,6 +880,7 @@ impl Replica {
                     PgOutputMsg::Message { prefix, .. } => {
                         if prefix == DDL_SIGNAL_PREFIX {
                             self.resync_schema(&mut expected, &mut rels)?;
+                            self.resync_security()?;
                         }
                     }
                     PgOutputMsg::Other => {}
@@ -900,6 +918,23 @@ impl Replica {
         }
         rels.retain(|_, r| expected.contains_key(&(r.schema.clone(), r.name.clone())));
         Ok(())
+    }
+
+    fn resync_security(&self) -> Result<(), Error> {
+        let mut snap = ReplConn::connect_and_auth(&self.config, false)?;
+        let outcome = (|| -> Result<(), Error> {
+            let security = backfill::introspect_security(&mut snap, &self.config.publication)?;
+            let new_fp = backfill::security_fingerprint(&security);
+            let stored = block_on(meta::security_fingerprint(&self.db))?.unwrap_or_default();
+            if new_fp == stored {
+                return Ok(());
+            }
+            backfill::reconcile_security(&self.db, &security)?;
+            block_on(meta::bump_security(&self.db, &new_fp))?;
+            Ok(())
+        })();
+        snap.terminate();
+        outcome
     }
 
     fn rel(rels: &HashMap<u32, Rel>, rel_id: u32) -> Result<&Rel, Error> {
@@ -978,6 +1013,30 @@ impl Replica {
         }
         *self.halt_reason.lock().unwrap() = Some(e.to_string());
         self.halted.store(true, Ordering::SeqCst);
+    }
+}
+
+impl PGlite {
+    pub async fn query_as(
+        &self,
+        role: &str,
+        claims: Option<&str>,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, Error> {
+        let tx = self.transaction().await?;
+        if let Some(claims) = claims {
+            tx.query(
+                &format!("SET LOCAL request.jwt.claims = {}", lit(claims)),
+                &[],
+            )
+            .await?;
+        }
+        tx.query(&format!("SET LOCAL ROLE {}", ident(role)), &[])
+            .await?;
+        let rows = tx.query(sql, params).await?;
+        tx.rollback().await?;
+        Ok(rows)
     }
 }
 

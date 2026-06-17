@@ -41,10 +41,23 @@ pub(crate) async fn ensure_meta_table(db: &PGlite) -> Result<(), Error> {
             publication text NOT NULL,
             watermark_lsn text NOT NULL,
             fingerprint text NOT NULL,
+            security_version bigint NOT NULL DEFAULT 0,
+            security_fingerprint text NOT NULL DEFAULT '',
             updated_at timestamptz NOT NULL DEFAULT now()
         )",
     )
-    .await
+    .await?;
+    db.query(
+        "ALTER TABLE _pglite_replica ADD COLUMN IF NOT EXISTS security_version bigint NOT NULL DEFAULT 0",
+        &[],
+    )
+    .await?;
+    db.query(
+        "ALTER TABLE _pglite_replica ADD COLUMN IF NOT EXISTS security_fingerprint text NOT NULL DEFAULT ''",
+        &[],
+    )
+    .await?;
+    Ok(())
 }
 
 pub(crate) async fn load_state(db: &PGlite) -> Result<Option<ReplicaState>, Error> {
@@ -99,6 +112,45 @@ pub(crate) async fn update_fingerprint(db: &PGlite, fingerprint: &str) -> Result
     )
     .await?;
     Ok(())
+}
+
+pub(crate) async fn security_fingerprint(db: &PGlite) -> Result<Option<String>, Error> {
+    let rows = db
+        .query(
+            "SELECT security_fingerprint FROM _pglite_replica WHERE id = 1",
+            &[],
+        )
+        .await?;
+    match rows.first() {
+        Some(row) => Ok(Some(row.get::<&str>(0)?.to_string())),
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn bump_security(db: &PGlite, fingerprint: &str) -> Result<(), Error> {
+    db.query(
+        "UPDATE _pglite_replica SET security_version = security_version + 1, \
+         security_fingerprint = $1, updated_at = now() WHERE id = 1",
+        &[&fingerprint],
+    )
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn security_version(db: &PGlite) -> Result<u64, Error> {
+    let rows = db
+        .query(
+            "SELECT security_version::text FROM _pglite_replica WHERE id = 1",
+            &[],
+        )
+        .await?;
+    let value = rows
+        .first()
+        .map(|row| row.get::<&str>(0))
+        .transpose()?
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    Ok(value)
 }
 
 #[cfg(test)]
