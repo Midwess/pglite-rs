@@ -67,6 +67,13 @@ impl Drop for CloseOnDrop {
 pub(crate) type NotificationCallback = Box<dyn Fn(&str) + Send + Sync>;
 pub(crate) type ListenerMap = HashMap<String, Vec<(u64, NotificationCallback)>>;
 
+#[derive(Debug)]
+pub struct SimpleQuery {
+    pub columns: Vec<(String, Type)>,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub command_tag: String,
+}
+
 #[derive(Clone)]
 pub(crate) enum Backend {
     InProcess {
@@ -301,6 +308,11 @@ impl PGlite {
         self.query_unlocked(sql, params).await
     }
 
+    pub async fn simple_query(&self, sql: &str) -> Result<Vec<SimpleQuery>, Error> {
+        let _guard = self.serial_guard().await;
+        self.simple_query_unlocked(sql).await
+    }
+
     pub async fn transaction(&self) -> Result<crate::transaction::Transaction<'_>, Error> {
         crate::transaction::Transaction::begin(self).await
     }
@@ -492,6 +504,101 @@ impl PGlite {
         let response = self.route(via, wire.to_vec()).await?;
         self.process_response(&response)?;
         Ok(())
+    }
+
+    pub(crate) async fn simple_query_unlocked(&self, sql: &str) -> Result<Vec<SimpleQuery>, Error> {
+        self.simple_query_via(Via::backend(), sql).await
+    }
+
+    pub(crate) async fn simple_query_via(
+        &self,
+        via: Via<'_>,
+        sql: &str,
+    ) -> Result<Vec<SimpleQuery>, Error> {
+        let mut wire = BytesMut::new();
+        frontend::query(sql, &mut wire).map_err(|e| Error::Protocol(e.to_string()))?;
+        let response = self.route(via, wire.to_vec()).await?;
+        self.process_response(&response)?;
+
+        let mut results = Vec::new();
+        let mut columns = None;
+        let mut rows = Vec::new();
+        let mut buf = BytesMut::from(&response[..]);
+        while let Some(message) =
+            Message::parse(&mut buf).map_err(|e| Error::Protocol(e.to_string()))?
+        {
+            match message {
+                Message::RowDescription(body) => {
+                    if columns.is_some() || !rows.is_empty() {
+                        return Err(Error::Protocol(
+                            "multiple RowDescription without CommandComplete".into(),
+                        ));
+                    }
+                    let mut fields = body.fields();
+                    let mut next_columns = Vec::new();
+                    while let Some(field) =
+                        fields.next().map_err(|e| Error::Protocol(e.to_string()))?
+                    {
+                        if field.format() != 0 {
+                            return Err(Error::Protocol(format!(
+                                "unsupported simple query column format {}",
+                                field.format()
+                            )));
+                        }
+                        next_columns.push((
+                            field.name().to_string(),
+                            Column::type_from_oid(field.type_oid()),
+                        ));
+                    }
+                    columns = Some(next_columns);
+                }
+                Message::DataRow(body) => {
+                    if columns.is_none() {
+                        return Err(Error::Protocol(
+                            "missing RowDescription before DataRow".into(),
+                        ));
+                    }
+                    let mut values = Vec::new();
+                    let mut ranges = body.ranges();
+                    while let Some(range) =
+                        ranges.next().map_err(|e| Error::Protocol(e.to_string()))?
+                    {
+                        let value = range
+                            .map(|range| {
+                                std::str::from_utf8(&body.buffer()[range])
+                                    .map(|value| value.to_string())
+                                    .map_err(|e| Error::Protocol(e.to_string()))
+                            })
+                            .transpose()?;
+                        values.push(value);
+                    }
+                    rows.push(values);
+                }
+                Message::CommandComplete(body) => {
+                    let tag = body
+                        .tag()
+                        .map_err(|e| Error::Protocol(e.to_string()))?
+                        .to_string();
+                    results.push(SimpleQuery {
+                        columns: columns.take().unwrap_or_default(),
+                        rows: std::mem::take(&mut rows),
+                        command_tag: tag,
+                    });
+                }
+                Message::EmptyQueryResponse
+                | Message::NoticeResponse(_)
+                | Message::NotificationResponse(_)
+                | Message::ParameterStatus(_)
+                | Message::ReadyForQuery(_) => {}
+                _ => {
+                    return Err(Error::Protocol(
+                        "unsupported message during simple query".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     pub(crate) async fn route(&self, via: Via<'_>, wire: Vec<u8>) -> Result<Vec<u8>, Error> {
