@@ -41,6 +41,8 @@ pub struct MultiProcessOptions {
     pub relaxed_durability: bool,
     pub start_params: Vec<String>,
     pub locale_provider: LocaleProvider,
+    pub listen_addresses: Option<String>,
+    pub port: Option<u16>,
 }
 
 impl Default for MultiProcessOptions {
@@ -55,6 +57,8 @@ impl Default for MultiProcessOptions {
             relaxed_durability: false,
             start_params: Vec::new(),
             locale_provider: LocaleProvider::default(),
+            listen_addresses: None,
+            port: None,
         }
     }
 }
@@ -78,7 +82,8 @@ impl Server {
             std::process::id(),
             INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
-        let sock_path = sock_dir.join(".s.PGSQL.5432");
+        let port = options.port.unwrap_or(5432);
+        let sock_path = sock_dir.join(format!(".s.PGSQL.{port}"));
         if sock_path.as_os_str().len() > 96 {
             return Err(Error::PostmasterStart(format!(
                 "socket path too long: {}",
@@ -93,7 +98,14 @@ impl Server {
             .arg(data_dir)
             .arg("-k")
             .arg(&sock_dir)
-            .args(["-c", "listen_addresses="])
+            .args([
+                "-c",
+                &format!(
+                    "listen_addresses={}",
+                    options.listen_addresses.clone().unwrap_or_default()
+                ),
+            ])
+            .args(["-c", &format!("port={port}")])
             .args([
                 "-c",
                 &format!(
