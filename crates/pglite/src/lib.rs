@@ -49,7 +49,7 @@ mod row;
 mod socket;
 mod transaction;
 
-pub use db::{LocaleProvider, PGlite, PGliteOptions};
+pub use db::{LocaleProvider, PGlite, PGliteOptions, SimpleQuery};
 pub use error::Error;
 pub use live::LiveQuery;
 #[cfg(feature = "multiple-process")]
