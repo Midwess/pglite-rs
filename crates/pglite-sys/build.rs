@@ -110,7 +110,7 @@ fn artifact_lib_dir() -> Option<PathBuf> {
     for (key, val) in env::vars() {
         if key.starts_with("DEP_PGLITE_LIB_") && key.ends_with("_ROOT") {
             let dir = PathBuf::from(val).join("lib");
-            if dir.join("libpglite.a").exists() {
+            if dir.join("libpglite.a").exists() || dir.join("libpglite.a.zst").exists() {
                 return Some(dir);
             }
         }
